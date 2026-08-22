@@ -80,7 +80,6 @@
   .group-title{font-size:14px; font-weight:700; margin:16px 0 6px; color:var(--primary-d);}
   .admin-actions{display:flex; flex-wrap:wrap; gap:8px; margin-top:12px;}
   .hidden{display:none;}
-  .pwd-card{max-width:340px; margin:40px auto; text-align:center;}
   .empty{color:var(--sub); text-align:center; padding:30px 0; font-size:14px;}
   .loading{text-align:center; color:var(--sub); padding:20px 0; font-size:14px;}
   .my-row{display:flex; align-items:center; justify-content:space-between; gap:10px; border:1px solid var(--line); border-radius:12px; padding:10px 12px; margin-bottom:8px;}
@@ -109,6 +108,7 @@
       每天可约：上午 10:00–12:00，下午 13:00–17:00，每半小时 1 个名额，同一时间最多 2 人。<br>
       预约时先填你的名字，邀约人会自动填成你的名字（可修改）。<br>
       绿色=可约，黄色=剩 1 个，灰色=已满。<br>
+      预约成功后可在「我的预约」里标记已到面或取消预约。<br>
       <b>临时登记网站，请勿填写身份证号、银行卡等敏感信息。</b>
     </div>
   </div>
@@ -162,18 +162,16 @@
 <div class="toast" id="toast"></div>
 
 <script>
-const API = "https://api.restful-api.dev/objects";
-const CFG_ID = "ff8081819ff5b11001a0276abe2372ab"; // 数据锚点对象 ID
+const API_BASE = "https://crudcrud.com/api/08d452572e0442548afa76f167b8299f/appointments";
 const SLOT_LIMIT = 2;
 const DEFAULT_PWD = "123456";
 const DAYS = 14;
 const MY_KEY = "msjy_my_appts";
 
-let data = { adminHash:"", updatedAt:0, appointments:[] };
 let appts = [];
+let cfgHash = "";
 let selectedDate = todayStr();
 let adminAuthed = false;
-let syncing = false;
 
 function $(id){ return document.getElementById(id); }
 function todayStr(){ const d=new Date(); return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"); }
@@ -198,46 +196,37 @@ async function sha256(text){
   return [...new Uint8Array(buf)].map(b=>b.toString(16).padStart(2,"0")).join("");
 }
 
-async function fetchData(){
-  const res = await fetch(API+"/"+CFG_ID, {cache:"no-store"});
+// ---------- 数据层 ----------
+async function fetchList(){
+  const res = await fetch(API_BASE, {cache:"no-store"});
   if(!res.ok) throw new Error("HTTP "+res.status);
-  const j = await res.json();
-  return j.data || { adminHash:"", updatedAt:0, appointments:[] };
+  return await res.json();
 }
-async function putData(d){
-  const res = await fetch(API+"/"+CFG_ID, {method:"PUT", headers:{"Content-Type":"application/json"}, body:JSON.stringify({name:"msjy2026-cfg", data:d})});
+async function createAppt(rec){
+  const res = await fetch(API_BASE, {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(rec)});
   if(!res.ok) throw new Error("HTTP "+res.status);
   return res.json();
 }
+async function updateAppt(id, rec){
+  const res = await fetch(API_BASE+"/"+id, {method:"PUT", headers:{"Content-Type":"application/json"}, body:JSON.stringify(rec)});
+  if(!res.ok) throw new Error("HTTP "+res.status);
+  return res.json();
+}
+async function deleteAppt(id){
+  const res = await fetch(API_BASE+"/"+id, {method:"DELETE"});
+  if(!res.ok && res.status!==404) throw new Error("HTTP "+res.status);
+}
 
 async function sync(quiet){
-  if(syncing) return;
-  syncing = true;
   try{
-    data = await fetchData();
-    appts = Array.isArray(data.appointments)? data.appointments : [];
+    const list = await fetchList();
+    appts = list.filter(x=>!x.kind);
+    const cfg = list.find(x=>x.kind==="cfg");
+    cfgHash = cfg && cfg.adminHash ? cfg.adminHash : await sha256(DEFAULT_PWD);
     render();
   }catch(e){
     if(!quiet) toast("数据服务暂时连不上，请稍后重试");
-  }finally{
-    syncing = false;
   }
-}
-
-async function mutate(fn){
-  for(let i=0;i<8;i++){
-    const cur = await fetchData();
-    const next = fn(JSON.parse(JSON.stringify(cur)));
-    next.updatedAt = Date.now();
-    await putData(next);
-    const check = await fetchData();
-    if(check.updatedAt === next.updatedAt && (check.appointments||[]).length === (next.appointments||[]).length){
-      data = next; appts = next.appointments||[];
-      return next;
-    }
-    await new Promise(r=>setTimeout(r, 300+i*200));
-  }
-  throw new Error("提交冲突，请重试");
 }
 
 function apptsAt(date, time){ return appts.filter(a=>a.date===date && a.time===time); }
@@ -298,25 +287,26 @@ async function submitBook(){
   if(!phone) return toast("请填写手机号");
   $("submitBtn").disabled=true;
   try{
-    const ok = await mutate(cur=>{
-      const curList = cur.appointments||[];
-      const cnt = curList.filter(a=>a.date===sheetDate && a.time===sheetTime).length;
-      if(cnt>=SLOT_LIMIT) throw new Error("该时间已被约满，请换一个");
-      cur.appointments = curList.concat([{ id:uuid(), name, age, phone, date:sheetDate, time:sheetTime, inviter, createdAt:Date.now(), checkedIn:false }]);
-      return cur;
-    });
-    const added = ok.appointments[ok.appointments.length-1];
-    if(added && added.id){
-      const my = loadMy();
-      my.push({ id:added.id, date:sheetDate, time:sheetTime, name });
-      saveMy(my);
+    const list1 = await fetchList();
+    const cnt1 = list1.filter(a=>a.date===sheetDate && a.time===sheetTime && !a.kind).length;
+    if(cnt1>=SLOT_LIMIT){ toast("该时间已被约满，请换一个"); closeSheet(); return; }
+    const rec = { name, age, phone, date:sheetDate, time:sheetTime, inviter, createdAt:Date.now(), checkedIn:false };
+    const created = await createAppt(rec);
+    // 并发保护：若刚被抢超员，撤回自己
+    const list2 = await fetchList();
+    const cnt2 = list2.filter(a=>a.date===sheetDate && a.time===sheetTime && !a.kind).length;
+    if(cnt2>SLOT_LIMIT){
+      try{ await deleteAppt(created._id); }catch(_){}
+      toast("手慢了，这个时间刚被约满"); closeSheet(); return;
     }
+    const my = loadMy();
+    my.push({ id:created._id, date:sheetDate, time:sheetTime, name });
+    saveMy(my);
     toast("预约成功！"+sheetDate+" "+sheetTime+"，可在「我的预约」标记到面或取消");
     closeSheet();
-    render();
+    await sync(true);
   }catch(e){
-    toast(e.message && e.message.includes("约满")? e.message : "提交失败，请重试");
-    if(e.message && e.message.includes("约满")) closeSheet();
+    toast("提交失败，请重试");
   }finally{
     $("submitBtn").disabled=false;
   }
@@ -332,14 +322,14 @@ function renderMy(){
   if(!my.length){ box.innerHTML="<div class='empty'>你还没有在本机登记过预约</div>"; return; }
   let html="";
   for(const m of my){
-    const cur = appts.find(a=>a.id===m.id);
+    const cur = appts.find(a=>a._id===m.id);
     if(!cur){
       html+="<div class='my-row'><div><b>"+esc(m.name)+"</b> "+m.date+" "+m.time+"（已取消或失效）</div></div>";
       continue;
     }
     html+="<div class='my-row'><div><b>"+esc(cur.name)+"</b> "+cur.date+" "+cur.time+" "+(cur.checkedIn?"<span class='tag ok'>已到面</span>":"<span class='tag no'>未到</span>")+"</div><div class='ops'>";
-    if(!cur.checkedIn) html+="<button class='btn small' onclick='markMyDone(\""+cur.id+"\")'>标记已到面</button> ";
-    html+="<button class='btn small gray' onclick='cancelMy(\""+cur.id+"\")'>取消预约</button></div></div>";
+    if(!cur.checkedIn) html+="<button class='btn small' onclick='markMyDone(\""+cur._id+"\")'>标记已到面</button> ";
+    html+="<button class='btn small gray' onclick='cancelMy(\""+cur._id+"\")'>取消预约</button></div></div>";
   }
   box.innerHTML=html;
 }
@@ -351,17 +341,19 @@ function toggleMy(){
 async function markMyDone(id){
   if(!confirm("确认自己已到面？")) return;
   try{
-    await mutate(cur=>{ cur.appointments=(cur.appointments||[]).map(x=>x.id===id?{...x,checkedIn:true}:x); return cur; });
-    toast("已标记到面"); render();
+    const list = await fetchList();
+    const rec = list.find(x=>x._id===id);
+    if(rec) await updateAppt(id, {...rec, checkedIn:true});
+    toast("已标记到面"); await sync(true);
   }catch(e){ toast("操作失败"); }
 }
 async function cancelMy(id){
-  const a=appts.find(x=>x.id===id); if(!a) return;
+  const a=appts.find(x=>x._id===id); if(!a) return;
   if(!confirm("确定取消 "+a.name+" "+a.date+" "+a.time+" 的预约？")) return;
   try{
-    await mutate(cur=>{ cur.appointments=(cur.appointments||[]).filter(x=>x.id!==id); return cur; });
+    await deleteAppt(id);
     saveMy(loadMy().filter(m=>m.id!==id));
-    toast("已取消预约，该时间段已释放"); render();
+    toast("已取消预约，该时间段已释放"); await sync(true);
   }catch(e){ toast("操作失败"); }
 }
 
@@ -377,7 +369,7 @@ async function openAdmin(){
   const pwd=prompt("请输入管理密码（默认 123456）：");
   if(pwd===null) return;
   const hash=await sha256(String(pwd));
-  const target=data.adminHash || await sha256(DEFAULT_PWD);
+  const target=cfgHash || await sha256(DEFAULT_PWD);
   if(hash===target){ adminAuthed=true; showAdmin(); }
   else toast("密码错误");
 }
@@ -391,11 +383,10 @@ function backPublic(){ $("adminView").classList.add("hidden"); $("publicView").c
 
 function renderAdmin(){
   const sorted=[...appts].sort((a,b)=>(a.date+a.time).localeCompare(b.date+b.time));
-  const total=sorted.length;
-  const today=appts.filter(a=>a.date===todayStr()).length;
-  const pending=appts.filter(a=>!a.checkedIn).length;
-  const done=appts.filter(a=>!!a.checkedIn).length;
-  $("stTotal").textContent=total; $("stToday").textContent=today; $("stPending").textContent=pending; $("stDone").textContent=done;
+  $("stTotal").textContent=sorted.length;
+  $("stToday").textContent=appts.filter(a=>a.date===todayStr()).length;
+  $("stPending").textContent=appts.filter(a=>!a.checkedIn).length;
+  $("stDone").textContent=appts.filter(a=>!!a.checkedIn).length;
   const box=$("adminList");
   if(!sorted.length){ box.innerHTML="<div class='empty'>还没有预约</div>"; return; }
   let html=""; let last="";
@@ -407,8 +398,8 @@ function renderAdmin(){
       last=key;
     }
     html+="<tr><td>"+a.time+"</td><td>"+esc(a.name)+"</td><td>"+esc(a.age||"-")+"</td><td>"+esc(a.phone||"-")+"</td><td>"+esc(a.inviter||"-")+"</td><td>"+(a.checkedIn?"<span class='tag ok'>已到面</span>":"<span class='tag no'>未到</span>")+"</td><td>";
-    if(!a.checkedIn) html+="<button class='btn small' onclick='markDone(\""+a.id+"\")'>标记已到面</button> ";
-    html+="<button class='btn small gray' onclick='removeOne(\""+a.id+"\")'>删除</button></td></tr>";
+    if(!a.checkedIn) html+="<button class='btn small' onclick='markDone(\""+a._id+"\")'>标记已到面</button> ";
+    html+="<button class='btn small gray' onclick='removeOne(\""+a._id+"\")'>删除</button></td></tr>";
   }
   if(last) html+="</tbody></table>";
   box.innerHTML=html;
@@ -416,19 +407,21 @@ function renderAdmin(){
 function esc(s){ return String(s==null?"":s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
 
 async function markDone(id){
-  const a=appts.find(x=>x.id===id); if(!a) return;
+  const a=appts.find(x=>x._id===id); if(!a) return;
   if(!confirm("确认 "+a.name+" 已到面？")) return;
   try{
-    await mutate(cur=>{ cur.appointments=(cur.appointments||[]).map(x=>x.id===id?{...x,checkedIn:true}:x); return cur; });
-    toast("已标记到面"); render();
+    const list = await fetchList();
+    const rec = list.find(x=>x._id===id);
+    if(rec) await updateAppt(id, {...rec, checkedIn:true});
+    toast("已标记到面"); await sync(true);
   }catch(e){ toast("操作失败"); }
 }
 async function removeOne(id){
-  const a=appts.find(x=>x.id===id); if(!a) return;
+  const a=appts.find(x=>x._id===id); if(!a) return;
   if(!confirm("删除 "+a.name+" 的预约？")) return;
   try{
-    await mutate(cur=>{ cur.appointments=(cur.appointments||[]).filter(x=>x.id!==id); return cur; });
-    toast("已删除"); render();
+    await deleteAppt(id);
+    toast("已删除"); await sync(true);
   }catch(e){ toast("操作失败"); }
 }
 
@@ -456,7 +449,11 @@ async function savePwd(){
   if(pwd.length<4) return toast("密码至少 4 位");
   const hash=await sha256(pwd);
   try{
-    await mutate(cur=>{ cur.adminHash=hash; return cur; });
+    const list = await fetchList();
+    const cfg = list.find(x=>x.kind==="cfg");
+    if(cfg){ await updateAppt(cfg._id, {...cfg, adminHash:hash}); }
+    else { await createAppt({kind:"cfg", adminHash:hash}); }
+    cfgHash=hash;
     toast("管理密码已修改");
     $("pwdEdit").classList.add("hidden");
   }catch(e){ toast("保存失败"); }
@@ -464,10 +461,12 @@ async function savePwd(){
 async function wipeAll(){
   if(!confirm("确定清空全部预约？此操作不可恢复（可先导出备份）！")) return;
   if(!confirm("再次确认：全部预约将被删除。")) return;
-  try{
-    await mutate(cur=>{ cur.appointments=[]; return cur; });
-    toast("已清空全部预约"); render();
-  }catch(e){ toast("操作失败"); }
+  let ok=0, fail=0;
+  for(const a of appts){
+    try{ await deleteAppt(a._id); ok++; }catch(e){ fail++; }
+  }
+  toast("已删除 "+ok+" 条"+(fail?"，失败 "+fail+" 条":""));
+  await sync(true);
 }
 
 sync();
