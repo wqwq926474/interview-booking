@@ -162,13 +162,13 @@
 <div class="toast" id="toast"></div>
 
 <script>
-const API_OBJ = "https://api.restful-api.dev/objects/ff8081819ff5b11001a0276abe2372ab";
+const API_BASE = "https://api.restful-api.dev/collections/interview/objects";
+const API_KEY = "c2eb9289-bcd3-4dc9-be5e-52accd915a5a";
 const SLOT_LIMIT = 2;
 const DEFAULT_PWD = "123456";
 const DAYS = 14;
 const MY_KEY = "msjy_my_appts";
 
-let data = { adminHash:"", updatedAt:0, appointments:[] };
 let appts = [];
 let cfgHash = "";
 let selectedDate = todayStr();
@@ -197,11 +197,12 @@ async function sha256(text){
   return [...new Uint8Array(buf)].map(b=>b.toString(16).padStart(2,"0")).join("");
 }
 
-// ---------- 数据层（XHR 保证浏览器兼容） ----------
+// ---------- 数据层（XHR + API Key，浏览器兼容） ----------
 function xhrRequest(method, url, body){
   return new Promise((resolve,reject)=>{
     const x=new XMLHttpRequest();
     x.open(method, url);
+    x.setRequestHeader("x-api-key", API_KEY);
     if(body!==undefined) x.setRequestHeader("Content-Type","application/json");
     x.timeout=25000;
     x.onload=()=>{
@@ -217,40 +218,33 @@ function xhrRequest(method, url, body){
     x.send(body===undefined?null:JSON.stringify(body));
   });
 }
-async function fetchData(){
-  const j = await xhrRequest("GET", API_OBJ);
-  return j.data || { adminHash:"", updatedAt:0, appointments:[] };
+async function fetchList(){
+  return await xhrRequest("GET", API_BASE);
 }
-async function putData(d){
-  await xhrRequest("PUT", API_OBJ, {name:"msjy2026-cfg", data:d});
+async function createAppt(rec){
+  return await xhrRequest("POST", API_BASE, rec);
 }
+async function updateAppt(id, rec){
+  return await xhrRequest("PUT", API_BASE+"/"+id, rec);
+}
+async function deleteAppt(id){
+  try{ await xhrRequest("DELETE", API_BASE+"/"+id); }
+  catch(e){ if(String(e.message).includes("404")) return; throw e; }
+}
+
 async function sync(quiet){
   try{
-    data = await fetchData();
-    appts = Array.isArray(data.appointments)? data.appointments : [];
-    cfgHash = data.adminHash || await sha256(DEFAULT_PWD);
+    const list = await fetchList();
+    appts = list.filter(o=>!(o.data && o.data.kind==="cfg"));
+    const cfg = list.find(o=>o.data && o.data.kind==="cfg");
+    cfgHash = cfg && cfg.data.adminHash ? cfg.data.adminHash : await sha256(DEFAULT_PWD);
     render();
   }catch(e){
     if(!quiet) toast(String(e.message).includes("403") ? "数据服务当天次数已用完，请换网络或稍后再试" : "数据服务暂时连不上，请稍后重试");
   }
 }
-async function mutate(fn){
-  for(let i=0;i<6;i++){
-    const cur = await fetchData();
-    const next = fn(JSON.parse(JSON.stringify(cur)));
-    next.updatedAt = Date.now();
-    await putData(next);
-    const check = await fetchData();
-    if(check.updatedAt === next.updatedAt && (check.appointments||[]).length === (next.appointments||[]).length){
-      data = next; appts = next.appointments||[];
-      return next;
-    }
-    await new Promise(r=>setTimeout(r, 400+i*200));
-  }
-  throw new Error("提交冲突，请重试");
-}
 
-function apptsAt(date, time){ return appts.filter(a=>a.date===date && a.time===time); }
+function apptsAt(date, time){ return appts.filter(a=>(a.data||{}).date===date && (a.data||{}).time===time); }
 function countAt(date, time){ return apptsAt(date,time).length; }
 
 function render(){
@@ -308,25 +302,25 @@ async function submitBook(){
   if(!phone) return toast("请填写手机号");
   $("submitBtn").disabled=true;
   try{
-    const ok = await mutate(cur=>{
-      const curList = cur.appointments||[];
-      const cnt = curList.filter(a=>a.date===sheetDate && a.time===sheetTime).length;
-      if(cnt>=SLOT_LIMIT) throw new Error("该时间已被约满，请换一个");
-      cur.appointments = curList.concat([{ id:uuid(), name, age, phone, date:sheetDate, time:sheetTime, inviter, createdAt:Date.now(), checkedIn:false }]);
-      return cur;
-    });
-    const added = ok.appointments[ok.appointments.length-1];
-    if(added && added.id){
-      const my = loadMy();
-      my.push({ id:added.id, date:sheetDate, time:sheetTime, name });
-      saveMy(my);
+    const list1 = await fetchList();
+    const cnt1 = list1.filter(o=>(o.data||{}).date===sheetDate && (o.data||{}).time===sheetTime && !((o.data||{}).kind==="cfg")).length;
+    if(cnt1>=SLOT_LIMIT){ toast("该时间已被约满，请换一个"); closeSheet(); return; }
+    const rec = { name:"appt-"+uuid(), data:{ name, age, phone, date:sheetDate, time:sheetTime, inviter, createdAt:Date.now(), checkedIn:false } };
+    const created = await createAppt(rec);
+    const list2 = await fetchList();
+    const cnt2 = list2.filter(o=>(o.data||{}).date===sheetDate && (o.data||{}).time===sheetTime && !((o.data||{}).kind==="cfg")).length;
+    if(cnt2>SLOT_LIMIT){
+      try{ await deleteAppt(created.id); }catch(_){}
+      toast("手慢了，这个时间刚被约满"); closeSheet(); return;
     }
+    const my = loadMy();
+    my.push({ id:created.id, date:sheetDate, time:sheetTime, name });
+    saveMy(my);
     toast("预约成功！"+sheetDate+" "+sheetTime+"，可在「我的预约」标记到面或取消");
     closeSheet();
-    render();
+    await sync(true);
   }catch(e){
-    toast(e.message && e.message.includes("约满")? e.message : "提交失败，请重试");
-    if(e.message && e.message.includes("约满")) closeSheet();
+    toast(String(e.message).includes("403") ? "数据服务当天次数已用完，请换网络或稍后再试" : "提交失败，请重试");
   }finally{
     $("submitBtn").disabled=false;
   }
@@ -343,12 +337,13 @@ function renderMy(){
   let html="";
   for(const m of my){
     const cur = appts.find(a=>a.id===m.id);
+    const d = cur?cur.data:{};
     if(!cur){
       html+="<div class='my-row'><div><b>"+esc(m.name)+"</b> "+m.date+" "+m.time+"（已取消或失效）</div></div>";
       continue;
     }
-    html+="<div class='my-row'><div><b>"+esc(cur.name)+"</b> "+cur.date+" "+cur.time+" "+(cur.checkedIn?"<span class='tag ok'>已到面</span>":"<span class='tag no'>未到</span>")+"</div><div class='ops'>";
-    if(!cur.checkedIn) html+="<button class='btn small' onclick='markMyDone(\""+cur.id+"\")'>标记已到面</button> ";
+    html+="<div class='my-row'><div><b>"+esc(d.name)+"</b> "+d.date+" "+d.time+" "+(d.checkedIn?"<span class='tag ok'>已到面</span>":"<span class='tag no'>未到</span>")+"</div><div class='ops'>";
+    if(!d.checkedIn) html+="<button class='btn small' onclick='markMyDone(\""+cur.id+"\")'>标记已到面</button> ";
     html+="<button class='btn small gray' onclick='cancelMy(\""+cur.id+"\")'>取消预约</button></div></div>";
   }
   box.innerHTML=html;
@@ -361,17 +356,20 @@ function toggleMy(){
 async function markMyDone(id){
   if(!confirm("确认自己已到面？")) return;
   try{
-    await mutate(cur=>{ cur.appointments=(cur.appointments||[]).map(x=>x.id===id?{...x,checkedIn:true}:x); return cur; });
-    toast("已标记到面"); render();
+    const list = await fetchList();
+    const rec = list.find(x=>x.id===id);
+    if(rec) await updateAppt(id, {name:rec.name, data:{...(rec.data||{}), checkedIn:true}});
+    toast("已标记到面"); await sync(true);
   }catch(e){ toast("操作失败"); }
 }
 async function cancelMy(id){
   const a=appts.find(x=>x.id===id); if(!a) return;
-  if(!confirm("确定取消 "+a.name+" "+a.date+" "+a.time+" 的预约？")) return;
+  const d=a.data||{};
+  if(!confirm("确定取消 "+d.name+" "+d.date+" "+d.time+" 的预约？")) return;
   try{
-    await mutate(cur=>{ cur.appointments=(cur.appointments||[]).filter(x=>x.id!==id); return cur; });
+    await deleteAppt(id);
     saveMy(loadMy().filter(m=>m.id!==id));
-    toast("已取消预约，该时间段已释放"); render();
+    toast("已取消预约，该时间段已释放"); await sync(true);
   }catch(e){ toast("操作失败"); }
 }
 
@@ -400,23 +398,24 @@ function showAdmin(){
 function backPublic(){ $("adminView").classList.add("hidden"); $("publicView").classList.remove("hidden"); render(); }
 
 function renderAdmin(){
-  const sorted=[...appts].sort((a,b)=>(a.date+a.time).localeCompare(b.date+b.time));
+  const sorted=[...appts].sort((a,b)=>((a.data||{}).date+(a.data||{}).time).localeCompare((b.data||{}).date+(b.data||{}).time));
   $("stTotal").textContent=sorted.length;
-  $("stToday").textContent=appts.filter(a=>a.date===todayStr()).length;
-  $("stPending").textContent=appts.filter(a=>!a.checkedIn).length;
-  $("stDone").textContent=appts.filter(a=>!!a.checkedIn).length;
+  $("stToday").textContent=appts.filter(a=>(a.data||{}).date===todayStr()).length;
+  $("stPending").textContent=appts.filter(a=>!(a.data||{}).checkedIn).length;
+  $("stDone").textContent=appts.filter(a=>!!(a.data||{}).checkedIn).length;
   const box=$("adminList");
   if(!sorted.length){ box.innerHTML="<div class='empty'>还没有预约</div>"; return; }
   let html=""; let last="";
   for(const a of sorted){
-    const key=a.date;
+    const d=a.data||{};
+    const key=d.date;
     if(key!==last){
       if(last) html+="</tbody></table>";
-      html+="<div class='group-title'>"+a.date+"（"+weekdayCn(a.date)+"）</div><table><thead><tr><th>时间</th><th>姓名</th><th>年龄</th><th>手机号</th><th>邀约人</th><th>状态</th><th>操作</th></tr></thead><tbody>";
+      html+="<div class='group-title'>"+d.date+"（"+weekdayCn(d.date)+"）</div><table><thead><tr><th>时间</th><th>姓名</th><th>年龄</th><th>手机号</th><th>邀约人</th><th>状态</th><th>操作</th></tr></thead><tbody>";
       last=key;
     }
-    html+="<tr><td>"+a.time+"</td><td>"+esc(a.name)+"</td><td>"+esc(a.age||"-")+"</td><td>"+esc(a.phone||"-")+"</td><td>"+esc(a.inviter||"-")+"</td><td>"+(a.checkedIn?"<span class='tag ok'>已到面</span>":"<span class='tag no'>未到</span>")+"</td><td>";
-    if(!a.checkedIn) html+="<button class='btn small' onclick='markDone(\""+a.id+"\")'>标记已到面</button> ";
+    html+="<tr><td>"+d.time+"</td><td>"+esc(d.name)+"</td><td>"+esc(d.age||"-")+"</td><td>"+esc(d.phone||"-")+"</td><td>"+esc(d.inviter||"-")+"</td><td>"+(d.checkedIn?"<span class='tag ok'>已到面</span>":"<span class='tag no'>未到</span>")+"</td><td>";
+    if(!d.checkedIn) html+="<button class='btn small' onclick='markDone(\""+a.id+"\")'>标记已到面</button> ";
     html+="<button class='btn small gray' onclick='removeOne(\""+a.id+"\")'>删除</button></td></tr>";
   }
   if(last) html+="</tbody></table>";
@@ -426,32 +425,35 @@ function esc(s){ return String(s==null?"":s).replace(/&/g,"&amp;").replace(/</g,
 
 async function markDone(id){
   const a=appts.find(x=>x.id===id); if(!a) return;
-  if(!confirm("确认 "+a.name+" 已到面？")) return;
+  if(!confirm("确认 "+(a.data||{}).name+" 已到面？")) return;
   try{
-    await mutate(cur=>{ cur.appointments=(cur.appointments||[]).map(x=>x.id===id?{...x,checkedIn:true}:x); return cur; });
-    toast("已标记到面"); render();
+    const list = await fetchList();
+    const rec = list.find(x=>x.id===id);
+    if(rec) await updateAppt(id, {name:rec.name, data:{...(rec.data||{}), checkedIn:true}});
+    toast("已标记到面"); await sync(true);
   }catch(e){ toast("操作失败"); }
 }
 async function removeOne(id){
   const a=appts.find(x=>x.id===id); if(!a) return;
-  if(!confirm("删除 "+a.name+" 的预约？")) return;
+  if(!confirm("删除 "+(a.data||{}).name+" 的预约？")) return;
   try{
-    await mutate(cur=>{ cur.appointments=(cur.appointments||[]).filter(x=>x.id!==id); return cur; });
-    toast("已删除"); render();
+    await deleteAppt(id);
+    toast("已删除"); await sync(true);
   }catch(e){ toast("操作失败"); }
 }
 
 function exportCSV(){
   const rows=[["日期","时间","姓名","年龄","手机号","邀约人","登记时间","状态"]];
-  const sorted=[...appts].sort((a,b)=>(a.date+a.time).localeCompare(b.date+b.time));
+  const sorted=[...appts].sort((a,b)=>((a.data||{}).date+(a.data||{}).time).localeCompare((b.data||{}).date+(b.data||{}).time));
   for(const a of sorted){
-    rows.push([a.date,a.time,a.name,a.age||"",a.phone||"",a.inviter||"",new Date(a.createdAt||0).toLocaleString("zh-CN",{hour12:false}),a.checkedIn?"已到面":"未到"]);
+    const d=a.data||{};
+    rows.push([d.date,d.time,d.name,d.age||"",d.phone||"",d.inviter||"",new Date(d.createdAt||0).toLocaleString("zh-CN",{hour12:false}),d.checkedIn?"已到面":"未到"]);
   }
   const csv="\ufeff"+rows.map(r=>r.map(v=>'"'+String(v).replace(/"/g,'""')+'"').join(",")).join("\r\n");
   download(csv,"面试预约登记表.csv","text/csv;charset=utf-8");
 }
 function backupJSON(){
-  download(JSON.stringify(appts,null,2),"面试预约备份.json","application/json");
+  download(JSON.stringify(appts.map(a=>({id:a.id,data:a.data})),null,2),"面试预约备份.json","application/json");
 }
 function download(text,file,mime){
   const blob=new Blob([text],{type:mime});
@@ -465,7 +467,10 @@ async function savePwd(){
   if(pwd.length<4) return toast("密码至少 4 位");
   const hash=await sha256(pwd);
   try{
-    await mutate(cur=>{ cur.adminHash=hash; return cur; });
+    const list = await fetchList();
+    const cfg = list.find(o=>(o.data||{}).kind==="cfg");
+    if(cfg){ await updateAppt(cfg.id, {name:cfg.name, data:{...(cfg.data||{}), adminHash:hash}}); }
+    else { await createAppt({name:"cfg", data:{kind:"cfg", adminHash:hash}}); }
     cfgHash=hash;
     toast("管理密码已修改");
     $("pwdEdit").classList.add("hidden");
@@ -474,10 +479,12 @@ async function savePwd(){
 async function wipeAll(){
   if(!confirm("确定清空全部预约？此操作不可恢复（可先导出备份）！")) return;
   if(!confirm("再次确认：全部预约将被删除。")) return;
-  try{
-    await mutate(cur=>{ cur.appointments=[]; return cur; });
-    toast("已清空全部预约"); render();
-  }catch(e){ toast("操作失败"); }
+  let ok=0, fail=0;
+  for(const a of appts){
+    try{ await deleteAppt(a.id); ok++; }catch(e){ fail++; }
+  }
+  toast("已删除 "+ok+" 条"+(fail?"，失败 "+fail+" 条":""));
+  await sync(true);
 }
 
 sync();
