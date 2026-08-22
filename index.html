@@ -89,7 +89,7 @@
 <body>
 <div class="top">
   <h1>面试预约登记</h1>
-      <p>先选时间，再填信息；每个时间段最多 2 人。</p>
+  <p>先选时间，再填信息；每个时间段最多 2 人。</p>
 </div>
 
 <div class="wrap" id="publicView">
@@ -109,7 +109,6 @@
       预约时先填你的名字，邀约人会自动填成你的名字（可修改）。<br>
       绿色=可约，黄色=剩 1 个，灰色=已满。<br>
       同一个人可以重复登记同一个时间段（直到满 2 人），登记后在「我的预约」里可“再约一次”。<br>
-      预约成功后可在「我的预约」里标记已到面或取消预约。<br>
       <b>临时登记网站，请勿填写身份证号、银行卡等敏感信息。</b>
     </div>
   </div>
@@ -163,13 +162,15 @@
 <div class="toast" id="toast"></div>
 
 <script>
-const API_BASE = "https://api.restful-api.dev/collections/interview/objects";
-const API_KEY = "dfa31027-00ad-4408-acbc-00e474f569f5";
+const SUPABASE_URL = "https://eojjpcerxaofggkhljwh.supabase.co";
+const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVvampwY2VyeGFvZmdna2hsandoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODczODE1NjksImV4cCI6MjEwMjk1NzU2OX0.z_FVEEsP-IC1ZBKDDwcD_VXYSrS4Q9A4kJiW48IxkPw";
+const KV_URL = SUPABASE_URL + "/rest/v1/kv";
 const SLOT_LIMIT = 2;
 const DEFAULT_PWD = "123456";
 const DAYS = 14;
 const MY_KEY = "msjy_my_appts";
 
+let data = { adminHash:"", updatedAt:0, appointments:[] };
 let appts = [];
 let cfgHash = "";
 let selectedDate = todayStr();
@@ -198,12 +199,16 @@ async function sha256(text){
   return [...new Uint8Array(buf)].map(b=>b.toString(16).padStart(2,"0")).join("");
 }
 
-// ---------- 数据层（XHR + API Key，浏览器兼容） ----------
-function xhrRequest(method, url, body){
+// ---------- Supabase 数据层 ----------
+function xhrRequest(method, url, body, extraHeaders){
   return new Promise((resolve,reject)=>{
     const x=new XMLHttpRequest();
     x.open(method, url);
-    x.setRequestHeader("x-api-key", API_KEY);
+    x.setRequestHeader("apikey", SUPABASE_KEY);
+    x.setRequestHeader("Authorization", "Bearer " + SUPABASE_KEY);
+    if(extraHeaders){
+      for(const k in extraHeaders) x.setRequestHeader(k, extraHeaders[k]);
+    }
     if(body!==undefined) x.setRequestHeader("Content-Type","application/json");
     x.timeout=25000;
     x.onload=()=>{
@@ -219,30 +224,45 @@ function xhrRequest(method, url, body){
     x.send(body===undefined?null:JSON.stringify(body));
   });
 }
-async function fetchList(){
-  return await xhrRequest("GET", API_BASE);
+
+async function fetchData(){
+  const j = await xhrRequest("GET", KV_URL + "?select=value&key=eq.interview");
+  if(Array.isArray(j) && j.length && j[0] && j[0].value){
+    return j[0].value;
+  }
+  return { adminHash:"", updatedAt:0, appointments:[] };
 }
-async function createAppt(rec){
-  return await xhrRequest("POST", API_BASE, rec);
-}
-async function updateAppt(id, rec){
-  return await xhrRequest("PUT", API_BASE+"/"+id, rec);
-}
-async function deleteAppt(id){
-  try{ await xhrRequest("DELETE", API_BASE+"/"+id); }
-  catch(e){ if(String(e.message).includes("404")) return; throw e; }
+async function putData(d){
+  await xhrRequest("POST", KV_URL + "?on_conflict=key",
+    { key:"interview", value:d },
+    { Prefer:"resolution=merge-duplicates" });
 }
 
 async function sync(quiet){
   try{
-    const list = await fetchList();
-    appts = list.filter(o=>!(o.data && o.data.kind==="cfg"));
-    const cfg = list.find(o=>o.data && o.data.kind==="cfg");
-    cfgHash = cfg && cfg.data.adminHash ? cfg.data.adminHash : await sha256(DEFAULT_PWD);
+    data = await fetchData();
+    appts = Array.isArray(data.appointments)? data.appointments : [];
+    cfgHash = data.adminHash || await sha256(DEFAULT_PWD);
     render();
   }catch(e){
-    if(!quiet) toast(String(e.message).includes("403") ? "数据服务当天次数已用完，请换网络或稍后再试" : "数据服务暂时连不上，请稍后重试");
+    if(!quiet) toast("数据服务暂时连不上，请稍后重试");
   }
+}
+
+async function mutate(fn){
+  for(let i=0;i<6;i++){
+    const cur = await fetchData();
+    const next = fn(JSON.parse(JSON.stringify(cur)));
+    next.updatedAt = Date.now();
+    await putData(next);
+    const check = await fetchData();
+    if(check.updatedAt === next.updatedAt && (check.appointments||[]).length === (next.appointments||[]).length){
+      data = next; appts = next.appointments||[];
+      return next;
+    }
+    await new Promise(r=>setTimeout(r, 400+i*200));
+  }
+  throw new Error("提交冲突，请重试");
 }
 
 function apptsAt(date, time){ return appts.filter(a=>(a.data||{}).date===date && (a.data||{}).time===time); }
@@ -303,19 +323,25 @@ async function submitBook(){
   if(!phone) return toast("请填写手机号");
   $("submitBtn").disabled=true;
   try{
-    const list1 = await fetchList();
-    const cnt1 = list1.filter(o=>(o.data||{}).date===sheetDate && (o.data||{}).time===sheetTime && !((o.data||{}).kind==="cfg")).length;
-    if(cnt1>=SLOT_LIMIT){ toast("该时间已满 2 人，请换一个时间"); closeSheet(); return; }
-    const rec = { name:"appt-"+uuid(), data:{ name, age, phone, date:sheetDate, time:sheetTime, inviter, createdAt:Date.now(), checkedIn:false } };
-    const created = await createAppt(rec);
-    const my = loadMy();
-    my.push({ id:created.id, date:sheetDate, time:sheetTime, name });
-    saveMy(my);
+    const ok = await mutate(cur=>{
+      const curList = cur.appointments||[];
+      const cnt = curList.filter(a=>(a.data||{}).date===sheetDate && (a.data||{}).time===sheetTime).length;
+      if(cnt>=SLOT_LIMIT) throw new Error("该时间已满 2 人，请换一个时间");
+      cur.appointments = curList.concat([{ id:uuid(), data:{ name, age, phone, date:sheetDate, time:sheetTime, inviter, createdAt:Date.now(), checkedIn:false } }]);
+      return cur;
+    });
+    const added = ok.appointments[ok.appointments.length-1];
+    if(added && added.id){
+      const my = loadMy();
+      my.push({ id:added.id, date:sheetDate, time:sheetTime, name });
+      saveMy(my);
+    }
     toast("预约成功！"+sheetDate+" "+sheetTime+"，可在「我的预约」标记到面或取消");
     closeSheet();
-    await sync(true);
+    render();
   }catch(e){
-    toast(String(e.message).includes("403") ? "数据服务当天次数已用完，请换网络或稍后再试" : "提交失败，请重试");
+    toast(e.message && e.message.includes("满")? e.message : "提交失败，请重试");
+    if(e.message && e.message.includes("满")) closeSheet();
   }finally{
     $("submitBtn").disabled=false;
   }
@@ -362,10 +388,8 @@ function toggleMy(){
 async function markMyDone(id){
   if(!confirm("确认自己已到面？")) return;
   try{
-    const list = await fetchList();
-    const rec = list.find(x=>x.id===id);
-    if(rec) await updateAppt(id, {name:rec.name, data:{...(rec.data||{}), checkedIn:true}});
-    toast("已标记到面"); await sync(true);
+    await mutate(cur=>{ cur.appointments=(cur.appointments||[]).map(x=>x.id===id?{...x,data:{...(x.data||{}),checkedIn:true}}:x); return cur; });
+    toast("已标记到面"); render();
   }catch(e){ toast("操作失败"); }
 }
 async function cancelMy(id){
@@ -373,9 +397,9 @@ async function cancelMy(id){
   const d=a.data||{};
   if(!confirm("确定取消 "+d.name+" "+d.date+" "+d.time+" 的预约？")) return;
   try{
-    await deleteAppt(id);
+    await mutate(cur=>{ cur.appointments=(cur.appointments||[]).filter(x=>x.id!==id); return cur; });
     saveMy(loadMy().filter(m=>m.id!==id));
-    toast("已取消预约，该时间段已释放"); await sync(true);
+    toast("已取消预约，该时间段已释放"); render();
   }catch(e){ toast("操作失败"); }
 }
 
@@ -433,18 +457,16 @@ async function markDone(id){
   const a=appts.find(x=>x.id===id); if(!a) return;
   if(!confirm("确认 "+(a.data||{}).name+" 已到面？")) return;
   try{
-    const list = await fetchList();
-    const rec = list.find(x=>x.id===id);
-    if(rec) await updateAppt(id, {name:rec.name, data:{...(rec.data||{}), checkedIn:true}});
-    toast("已标记到面"); await sync(true);
+    await mutate(cur=>{ cur.appointments=(cur.appointments||[]).map(x=>x.id===id?{...x,data:{...(x.data||{}),checkedIn:true}}:x); return cur; });
+    toast("已标记到面"); render();
   }catch(e){ toast("操作失败"); }
 }
 async function removeOne(id){
   const a=appts.find(x=>x.id===id); if(!a) return;
   if(!confirm("删除 "+(a.data||{}).name+" 的预约？")) return;
   try{
-    await deleteAppt(id);
-    toast("已删除"); await sync(true);
+    await mutate(cur=>{ cur.appointments=(cur.appointments||[]).filter(x=>x.id!==id); return cur; });
+    toast("已删除"); render();
   }catch(e){ toast("操作失败"); }
 }
 
@@ -473,10 +495,7 @@ async function savePwd(){
   if(pwd.length<4) return toast("密码至少 4 位");
   const hash=await sha256(pwd);
   try{
-    const list = await fetchList();
-    const cfg = list.find(o=>(o.data||{}).kind==="cfg");
-    if(cfg){ await updateAppt(cfg.id, {name:cfg.name, data:{...(cfg.data||{}), adminHash:hash}}); }
-    else { await createAppt({name:"cfg", data:{kind:"cfg", adminHash:hash}}); }
+    await mutate(cur=>{ cur.adminHash=hash; return cur; });
     cfgHash=hash;
     toast("管理密码已修改");
     $("pwdEdit").classList.add("hidden");
@@ -485,12 +504,10 @@ async function savePwd(){
 async function wipeAll(){
   if(!confirm("确定清空全部预约？此操作不可恢复（可先导出备份）！")) return;
   if(!confirm("再次确认：全部预约将被删除。")) return;
-  let ok=0, fail=0;
-  for(const a of appts){
-    try{ await deleteAppt(a.id); ok++; }catch(e){ fail++; }
-  }
-  toast("已删除 "+ok+" 条"+(fail?"，失败 "+fail+" 条":""));
-  await sync(true);
+  try{
+    await mutate(cur=>{ cur.appointments=[]; return cur; });
+    toast("已清空全部预约"); render();
+  }catch(e){ toast("操作失败"); }
 }
 
 sync();
