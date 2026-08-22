@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>面试预约登记</title>
+<style>
+  :root{
+    --bg:#f4f6fb; --card:#ffffff; --line:#e4e8f0; --primary:#2563eb; --primary-d:#1d4ed8;
+    --ok:#16a34a; --warn:#d97706; --full:#94a3b8; --danger:#dc2626; --text:#0f172a; --sub:#64748b;
+  }
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
+  body{margin:0; background:var(--bg); color:var(--text); font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;}
+  .top{background:linear-gradient(135deg,#1d4ed8,#2563eb); color:#fff; padding:16px 14px 20px; position:sticky; top:0; z-index:20; box-shadow:0 2px 10px rgba(0,0,0,.12);}
+  .top h1{margin:0; font-size:20px; font-weight:700;}
+  .top p{margin:4px 0 0; font-size:12px; opacity:.9;}
+  .wrap{max-width:720px; margin:0 auto; padding:0 12px 90px;}
+  .dates{display:flex; gap:8px; overflow-x:auto; padding:12px 0 4px; scrollbar-width:none;}
+  .dates::-webkit-scrollbar{display:none;}
+  .date-tab{flex:0 0 auto; background:var(--card); border:1px solid var(--line); border-radius:12px; padding:8px 14px; text-align:center; cursor:pointer; min-width:62px;}
+  .date-tab .d{font-size:15px; font-weight:700;}
+  .date-tab .w{font-size:11px; color:var(--sub); margin-top:2px;}
+  .date-tab.on{background:var(--primary); color:#fff; border-color:var(--primary);}
+  .date-tab.on .w{color:#dbeafe;}
+  .slot-grid{display:grid; grid-template-columns:repeat(2,1fr); gap:10px; margin-top:12px;}
+  @media(min-width:560px){.slot-grid{grid-template-columns:repeat(3,1fr);}}
+  .slot{background:var(--card); border:1px solid var(--line); border-radius:14px; padding:12px 10px; cursor:pointer; position:relative; transition:transform .05s;}
+  .slot:active{transform:scale(.97);}
+  .slot .t{font-size:17px; font-weight:700;}
+  .slot .c{font-size:12px; margin-top:3px; color:var(--sub);}
+  .slot.free{border-color:#bbd7fe;}
+  .slot.free .c{color:var(--ok);}
+  .slot.mid{border-color:#fde68a; background:#fffbeb;}
+  .slot.mid .c{color:var(--warn);}
+  .slot.full{background:#eef1f6; border-color:#e2e7f0; cursor:not-allowed;}
+  .slot.full .t{color:#9aa5b4;}
+  .slot.full .c{color:#9aa5b4;}
+  .badge{position:absolute; top:8px; right:8px; font-size:10px; padding:2px 6px; border-radius:99px;}
+  .free .badge{background:#dcfce7; color:var(--ok);}
+  .mid .badge{background:#fef3c7; color:var(--warn);}
+  .full .badge{background:#e2e8f0; color:#64748b;}
+  .card{background:var(--card); border:1px solid var(--line); border-radius:14px; padding:14px; margin-top:12px;}
+  .card h2{margin:0 0 10px; font-size:15px;}
+  .notice{font-size:12px; color:var(--sub); line-height:1.6; margin-top:16px;}
+  .notice b{color:var(--danger);}
+  .btn{display:inline-flex; align-items:center; justify-content:center; gap:6px; background:var(--primary); color:#fff; border:0; border-radius:12px; padding:12px 18px; font-size:15px; font-weight:600; cursor:pointer;}
+  .btn:active{opacity:.85;}
+  .btn.ghost{background:var(--card); color:var(--primary); border:1px solid var(--line);}
+  .btn.danger{background:var(--danger);}
+  .btn.small{padding:6px 12px; font-size:13px; border-radius:9px;}
+  .btn.gray{background:#e2e8f0; color:#334155;}
+  .footer-bar{position:fixed; left:0; right:0; bottom:0; background:var(--card); border-top:1px solid var(--line); padding:10px 14px calc(10px + env(safe-area-inset-bottom)); display:flex; gap:10px; z-index:30;}
+  .footer-bar .btn{flex:1;}
+  .mask{position:fixed; inset:0; background:rgba(15,23,42,.45); z-index:40; display:none;}
+  .sheet{position:fixed; left:0; right:0; bottom:0; background:#fff; border-radius:20px 20px 0 0; z-index:50; padding:18px 16px calc(20px + env(safe-area-inset-bottom)); transform:translateY(105%); transition:transform .22s; max-height:88vh; overflow-y:auto;}
+  .sheet.open{transform:translateY(0);}
+  .sheet h3{margin:0 0 14px; font-size:17px;}
+  .field{margin-bottom:12px;}
+  .field label{display:block; font-size:13px; color:var(--sub); margin-bottom:5px;}
+  .field input{width:100%; border:1px solid var(--line); border-radius:10px; padding:12px 12px; font-size:15px; outline:none; background:#f8fafc;}
+  .field input:focus{border-color:var(--primary); background:#fff;}
+  .field .hint{font-size:11px; color:var(--sub); margin-top:3px;}
+  .row2{display:flex; gap:10px;}
+  .row2 .field{flex:1;}
+  .sheet .btns{display:flex; gap:10px; margin-top:16px;}
+  .sheet .btns .btn{flex:1;}
+  .grab{height:4px; width:40px; background:#cbd5e1; border-radius:99px; margin:0 auto 12px;}
+  .toast{position:fixed; left:50%; top:16px; transform:translateX(-50%); background:#0f172a; color:#fff; padding:10px 18px; border-radius:99px; font-size:14px; z-index:99; opacity:0; pointer-events:none; transition:opacity .25s; max-width:90%; text-align:center;}
+  .toast.show{opacity:1;}
+  .stat{display:flex; gap:10px; margin-top:12px;}
+  .stat .box{flex:1; background:var(--card); border:1px solid var(--line); border-radius:14px; padding:12px; text-align:center;}
+  .stat .num{font-size:24px; font-weight:800; color:var(--primary);}
+  .stat .lab{font-size:12px; color:var(--sub); margin-top:2px;}
+  table{width:100%; border-collapse:collapse; font-size:13px; margin-top:10px;}
+  th,td{border:1px solid var(--line); padding:8px 6px; text-align:left; vertical-align:top;}
+  th{background:#f1f5f9; font-weight:600; white-space:nowrap;}
+  td .tag{display:inline-block; font-size:11px; padding:2px 7px; border-radius:99px; white-space:nowrap;}
+  .tag.ok{background:#dcfce7; color:var(--ok);}
+  .tag.no{background:#fee2e2; color:var(--danger);}
+  .tag.warn{background:#fef3c7; color:var(--warn);}
+  .group-title{font-size:14px; font-weight:700; margin:16px 0 6px; color:var(--primary-d);}
+  .admin-actions{display:flex; flex-wrap:wrap; gap:8px; margin-top:12px;}
+  .hidden{display:none;}
+  .pwd-card{max-width:340px; margin:40px auto; text-align:center;}
+  .pwd-card input{width:100%; margin:12px 0; padding:12px; border:1px solid var(--line); border-radius:10px; font-size:16px; text-align:center;}
+  .empty{color:var(--sub); text-align:center; padding:30px 0; font-size:14px;}
+  .loading{text-align:center; color:var(--sub); padding:20px 0; font-size:14px;}
+</style>
+</head>
+<body>
+<div class="top">
+  <h1>面试预约登记</h1>
+  <p>先选时间，再填信息；每个时间段最多 2 人。</p>
+</div>
+
+<div class="wrap" id="publicView">
+  <div class="dates" id="dates"></div>
+  <div class="slot-grid" id="slots"></div>
+  <div class="card">
+    <h2>说明</h2>
+    <div class="notice">
+      每天可约：上午 10:00–12:00，下午 13:00–17:00，每半小时 1 个名额，同一时间最多 2 人。<br>
+      预约时先填你的名字，邀约人会自动填成你的名字（可修改）。<br>
+      绿色=可约，黄色=剩 1 个，灰色=已满。<br>
+      <b>临时登记网站，请勿填写身份证号、银行卡等敏感信息。</b>
+    </div>
+  </div>
+</div>
+
+<div class="wrap hidden" id="adminView">
+  <div class="card">
+    <h2>预约全览</h2>
+    <div class="stat">
+      <div class="box"><div class="num" id="stTotal">0</div><div class="lab">总预约</div></div>
+      <div class="box"><div class="num" id="stToday">0</div><div class="lab">今天</div></div>
+      <div class="box"><div class="num" id="stPending">0</div><div class="lab">待面</div></div>
+      <div class="box"><div class="num" id="stDone">0</div><div class="lab">已到面</div></div>
+    </div>
+    <div class="admin-actions">
+      <button class="btn small" onclick="exportCSV()">导出 CSV 表格</button>
+      <button class="btn small gray" onclick="backupJSON()">备份 JSON</button>
+      <button class="btn small gray" onclick="togglePwdEdit()">修改管理密码</button>
+      <button class="btn small danger" onclick="wipeAll()">清空全部预约</button>
+    </div>
+    <div id="pwdEdit" class="hidden" style="margin-top:10px;">
+      <div class="field"><label>新管理密码（至少 4 位）</label><input id="newPwd" type="text"></div>
+      <button class="btn small" onclick="savePwd()">保存密码</button>
+    </div>
+    <div id="adminList"></div>
+  </div>
+</div>
+
+<div class="mask" id="mask"></div>
+<div class="sheet" id="sheet">
+  <div class="grab"></div>
+  <h3 id="sheetTitle">预约面试</h3>
+  <div class="field"><label>姓名 *</label><input id="fName" type="text" placeholder="请输入你的姓名" maxlength="30"></div>
+  <div class="row2">
+    <div class="field"><label>年龄</label><input id="fAge" type="text" inputmode="numeric" placeholder="选填" maxlength="3"></div>
+    <div class="field"><label>手机号 *</label><input id="fPhone" type="tel" placeholder="手机号" maxlength="20"></div>
+  </div>
+  <div class="field"><label>到面时间</label><input id="fTime" type="text" readonly></div>
+  <div class="field"><label>邀约人</label><input id="fInviter" type="text" maxlength="30"><div class="hint">默认自动填成你的姓名</div></div>
+  <div class="btns">
+    <button class="btn ghost" onclick="closeSheet()">取消</button>
+    <button class="btn" id="submitBtn" onclick="submitBook()">确认预约</button>
+  </div>
+</div>
+
+<div class="footer-bar">
+  <button class="btn" onclick="scrollTopPublic()">预约面试</button>
+  <button class="btn ghost" onclick="openAdmin()">管理 / 全览</button>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+const API = "https://api.restful-api.dev/objects";
+const APP_PREFIX = "appt-";
+const CFG_NAME = "cfg-interview";
+const SLOT_LIMIT = 2;
+const DEFAULT_PWD = "123456";
+const DAYS = 14;
+
+let allObjects = [];
+let appts = [];
+let cfgObj = null;
+let selectedDate = todayStr();
+let adminAuthed = false;
+let loading = false;
+
+function $(id){ return document.getElementById(id); }
+function todayStr(){ const d=new Date(); return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"); }
+function addDays(dateStr, n){
+  const p=dateStr.split("-").map(Number);
+  const d=new Date(p[0],p[1]-1,p[2]+n);
+  return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0");
+}
+function weekdayCn(dateStr){
+  const p=dateStr.split("-").map(Number);
+  return ["周日","周一","周二","周三","周四","周五","周六"][new Date(p[0],p[1]-1,p[2]).getDay()];
+}
+function slotsFor(dateStr){
+  const slots=[];
+  for(let h=10; h<12; h++){ slots.push(h+":00"); slots.push(h+":30"); }
+  for(let h=13; h<17; h++){ slots.push(h+":00"); slots.push(h+":30"); }
+  return slots;
+}
+function uuid(){ return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g,c=>{const r=Math.random()*16|0; return (c==="x"?r:(r&3|8)).toString(16); }); }
+async function sha256(text){
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+  return [...new Uint8Array(buf)].map(b=>b.toString(16).padStart(2,"0")).join("");
+}
+
+async function loadAll(quiet){
+  loading = true;
+  try{
+    const res = await fetch(API, {cache:"no-store"});
+    if(!res.ok) throw new Error("HTTP "+res.status);
+    allObjects = await res.json();
+  }catch(e){
+    if(!quiet) toast("数据服务暂时连不上，请稍后重试");
+    allObjects = [];
+  }
+  appts = (allObjects||[]).filter(o=>String(o.name||"").startsWith(APP_PREFIX)).map(o=>({id:o.id, data:o.data||{}}));
+  const c = (allObjects||[]).find(o=>o.name===CFG_NAME);
+  cfgObj = c ? {id:c.id, data:c.data||{}} : null;
+  loading = false;
+  render();
+}
+
+async function apiPost(obj){
+  const res = await fetch(API, {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(obj)});
+  if(!res.ok) throw new Error("HTTP "+res.status);
+  return res.json();
+}
+async function apiPut(id, obj){
+  const res = await fetch(API+"/"+id, {method:"PUT", headers:{"Content-Type":"application/json"}, body:JSON.stringify(obj)});
+  if(!res.ok) throw new Error("HTTP "+res.status);
+  return res.json();
+}
+async function apiDelete(id){
+  const res = await fetch(API+"/"+id, {method:"DELETE"});
+  if(!res.ok && res.status!==404) throw new Error("HTTP "+res.status);
+}
+
+function apptsAt(date, time){ return appts.filter(a=>a.data.date===date && a.data.time===time); }
+function countAt(date, time){ return apptsAt(date,time).length; }
+
+function render(){
+  renderDates();
+  renderSlots();
+  if(adminAuthed) renderAdmin();
+}
+function renderDates(){
+  const box=$("dates"); box.innerHTML="";
+  for(let i=0;i<DAYS;i++){
+    const ds=addDays(todayStr(), i);
+    const d=document.createElement("div");
+    d.className="date-tab"+(ds===selectedDate?" on":"");
+    d.innerHTML="<div class='d'>"+(i===0?"今天":(i===1?"明天":String(Number(ds.slice(8,10)))+"日"))+"</div><div class='w'>"+weekdayCn(ds)+"</div>";
+    d.onclick=()=>{ selectedDate=ds; renderDates(); renderSlots(); };
+    box.appendChild(d);
+  }
+}
+function renderSlots(){
+  const box=$("slots"); box.innerHTML="";
+  const slots=slotsFor(selectedDate);
+  for(const t of slots){
+    const n=countAt(selectedDate,t);
+    const el=document.createElement("div");
+    if(n>=SLOT_LIMIT){ el.className="slot full"; el.innerHTML="<span class='badge'>已满</span><div class='t'>"+t+"</div><div class='c'>"+n+"/"+SLOT_LIMIT+" 人</div>"; }
+    else if(n===1){ el.className="slot mid"; el.innerHTML="<span class='badge'>剩 1</span><div class='t'>"+t+"</div><div class='c'>"+n+"/"+SLOT_LIMIT+" 人</div>"; }
+    else { el.className="slot free"; el.innerHTML="<span class='badge'>可约</span><div class='t'>"+t+"</div><div class='c'>0/"+SLOT_LIMIT+" 人</div>"; el.onclick=()=>openSheet(selectedDate,t); }
+    box.appendChild(el);
+  }
+}
+
+let sheetDate="", sheetTime="";
+function openSheet(date,time){
+  sheetDate=date; sheetTime=time;
+  $("sheetTitle").textContent="预约 · "+date+" "+time;
+  $("fTime").value=date+" "+time;
+  $("fName").value=""; $("fAge").value=""; $("fPhone").value=""; $("fInviter").value="";
+  $("mask").style.display="block"; $("sheet").classList.add("open");
+  setTimeout(()=>$("fName").focus(),300);
+}
+function closeSheet(){ $("mask").style.display="none"; $("sheet").classList.remove("open"); }
+$("mask").onclick=closeSheet;
+$("fName").addEventListener("input",function(){
+  if($("fInviter").dataset.manual!=="1") $("fInviter").value=this.value;
+});
+$("fInviter").addEventListener("input",function(){ this.dataset.manual="1"; });
+
+async function submitBook(){
+  const name=$("fName").value.trim();
+  const age=$("fAge").value.trim();
+  const phone=$("fPhone").value.trim();
+  const inviter=$("fInviter").value.trim()||name;
+  if(!name) return toast("请填写姓名");
+  if(!phone) return toast("请填写手机号");
+  $("submitBtn").disabled=true;
+  try{
+    await loadAll(true);
+    if(countAt(sheetDate,sheetTime)>=SLOT_LIMIT){ toast("这个时间刚被约满了，请换一个时间"); closeSheet(); return; }
+    const obj={ name:APP_PREFIX+uuid(), data:{ name, age, phone, date:sheetDate, time:sheetTime, inviter, createdAt:Date.now(), checkedIn:false } };
+    await apiPost(obj);
+    toast("预约成功！"+sheetDate+" "+sheetTime);
+    closeSheet();
+    await loadAll(true);
+  }catch(e){
+    toast("提交失败，请重试");
+  }finally{
+    $("submitBtn").disabled=false;
+  }
+}
+
+function toast(msg){
+  const t=$("toast"); t.textContent=msg; t.classList.add("show");
+  clearTimeout(t._timer); t._timer=setTimeout(()=>t.classList.remove("show"),2400);
+}
+function scrollTopPublic(){ backPublic(); $("publicView").scrollIntoView({behavior:"smooth"}); }
+
+// ---------- 管理 ----------
+async function openAdmin(){
+  if(adminAuthed){ showAdmin(); return; }
+  const pwd=prompt("请输入管理密码（默认 123456）：");
+  if(pwd===null) return;
+  const hash=await sha256(String(pwd));
+  const target=cfgObj?.data?.adminHash || await sha256(DEFAULT_PWD);
+  if(hash===target){ adminAuthed=true; showAdmin(); }
+  else toast("密码错误");
+}
+function showAdmin(){
+  $("publicView").classList.add("hidden");
+  $("adminView").classList.remove("hidden");
+  renderAdmin();
+  $("adminView").scrollIntoView();
+}
+function backPublic(){ $("adminView").classList.add("hidden"); $("publicView").classList.remove("hidden"); render(); }
+
+function renderAdmin(){
+  const sorted=[...appts].sort((a,b)=>(a.data.date+a.data.time).localeCompare(b.data.date+b.data.time));
+  const total=sorted.length;
+  const today=appts.filter(a=>a.data.date===todayStr()).length;
+  const pending=appts.filter(a=>!a.data.checkedIn).length;
+  const done=appts.filter(a=>!!a.data.checkedIn).length;
+  $("stTotal").textContent=total; $("stToday").textContent=today; $("stPending").textContent=pending; $("stDone").textContent=done;
+  const box=$("adminList");
+  if(!sorted.length){ box.innerHTML="<div class='empty'>还没有预约</div>"; return; }
+  let html=""; let last="";
+  for(const a of sorted){
+    const d=a.data;
+    const key=d.date;
+    if(key!==last){ html+="<div class='group-title'>"+d.date+"（"+weekdayCn(d.date)+"）</div>"; last=key; }
+    html+="<tr><td>"+d.time+"</td><td>"+esc(d.name)+"</td><td>"+esc(d.age||"-")+"</td><td>"+esc(d.phone||"-")+"</td><td>"+esc(d.inviter||"-")+"</td><td>"+(d.checkedIn?"<span class='tag ok'>已到面</span>":"<span class='tag no'>未到</span>")+"</td><td>";
+    if(!d.checkedIn) html+="<button class='btn small' onclick='markDone(\""+a.id+"\")'>标记已到面</button> ";
+    html+="<button class='btn small gray' onclick='removeOne(\""+a.id+"\")'>删除</button></td></tr>";
+  }
+  box.innerHTML="<table><thead><tr><th>时间</th><th>姓名</th><th>年龄</th><th>手机号</th><th>邀约人</th><th>状态</th><th>操作</th></tr></thead><tbody>"+html+"</tbody></table>";
+}
+function esc(s){ return String(s==null?"":s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
+
+async function markDone(id){
+  const a=appts.find(x=>x.id===id); if(!a) return;
+  if(!confirm("确认 "+a.data.name+" 已到面？")) return;
+  try{ await apiPut(id,{name:a.name,data:{...a.data,checkedIn:true}}); toast("已标记到面"); await loadAll(true); }
+  catch(e){ toast("操作失败"); }
+}
+async function removeOne(id){
+  const a=appts.find(x=>x.id===id); if(!a) return;
+  if(!confirm("删除 "+a.data.name+" 的预约？")) return;
+  try{ await apiDelete(id); toast("已删除"); await loadAll(true); }
+  catch(e){ toast("操作失败"); }
+}
+
+function exportCSV(){
+  const rows=[["日期","时间","姓名","年龄","手机号","邀约人","登记时间","状态"]];
+  const sorted=[...appts].sort((a,b)=>(a.data.date+a.data.time).localeCompare(b.data.date+b.data.time));
+  for(const a of sorted){
+    const d=a.data;
+    rows.push([d.date,d.time,d.name,d.age||"",d.phone||"",d.inviter||"",new Date(d.createdAt||0).toLocaleString("zh-CN",{hour12:false}),d.checkedIn?"已到面":"未到"]);
+  }
+  const csv="\ufeff"+rows.map(r=>r.map(v=>'"'+String(v).replace(/"/g,'""')+'"').join(",")).join("\r\n");
+  download(csv,"面试预约登记表.csv","text/csv;charset=utf-8");
+}
+function backupJSON(){
+  download(JSON.stringify(appts.map(a=>({id:a.id,data:a.data})),null,2),"面试预约备份.json","application/json");
+}
+function download(text,file,mime){
+  const blob=new Blob([text],{type:mime});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement("a"); a.href=url; a.download=file; a.click();
+  setTimeout(()=>URL.revokeObjectURL(url),2000);
+}
+function togglePwdEdit(){ $("pwdEdit").classList.toggle("hidden"); $("newPwd").value=""; }
+async function savePwd(){
+  const pwd=$("newPwd").value.trim();
+  if(pwd.length<4) return toast("密码至少 4 位");
+  const hash=await sha256(pwd);
+  try{
+    if(cfgObj){ await apiPut(cfgObj.id,{name:CFG_NAME,data:{adminHash:hash,updatedAt:Date.now()}}); }
+    else { const r=await apiPost({name:CFG_NAME,data:{adminHash:hash,updatedAt:Date.now()}}); cfgObj={id:r.id,data:r.data}; }
+    toast("管理密码已修改");
+    $("pwdEdit").classList.add("hidden");
+  }catch(e){ toast("保存失败"); }
+}
+async function wipeAll(){
+  if(!confirm("确定清空全部预约？此操作不可恢复（可先导出备份）！")) return;
+  if(!confirm("再次确认：全部预约将被删除。")) return;
+  let ok=0, fail=0;
+  for(const a of appts){
+    try{ await apiDelete(a.id); ok++; }catch(e){ fail++; }
+  }
+  toast("已删除 "+ok+" 条"+(fail?"，失败 "+fail+" 条":""));
+  await loadAll(true);
+}
+
+loadAll();
+</script>
+</body>
+</html>
