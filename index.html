@@ -77,12 +77,10 @@
   td .tag{display:inline-block; font-size:11px; padding:2px 7px; border-radius:99px; white-space:nowrap;}
   .tag.ok{background:#dcfce7; color:var(--ok);}
   .tag.no{background:#fee2e2; color:var(--danger);}
-  .tag.warn{background:#fef3c7; color:var(--warn);}
   .group-title{font-size:14px; font-weight:700; margin:16px 0 6px; color:var(--primary-d);}
   .admin-actions{display:flex; flex-wrap:wrap; gap:8px; margin-top:12px;}
   .hidden{display:none;}
   .pwd-card{max-width:340px; margin:40px auto; text-align:center;}
-  .pwd-card input{width:100%; margin:12px 0; padding:12px; border:1px solid var(--line); border-radius:10px; font-size:16px; text-align:center;}
   .empty{color:var(--sub); text-align:center; padding:30px 0; font-size:14px;}
   .loading{text-align:center; color:var(--sub); padding:20px 0; font-size:14px;}
 </style>
@@ -126,7 +124,7 @@
       <div class="field"><label>新管理密码（至少 4 位）</label><input id="newPwd" type="text"></div>
       <button class="btn small" onclick="savePwd()">保存密码</button>
     </div>
-    <div id="adminList"></div>
+    <div id="adminList"><div class="loading">加载中…</div></div>
   </div>
 </div>
 
@@ -155,18 +153,16 @@
 
 <script>
 const API = "https://api.restful-api.dev/objects";
-const APP_PREFIX = "msjy2026-";
-const CFG_NAME = "cfg-interview";
+const CFG_ID = "ff8081819ff5b11001a0276abe2372ab"; // 数据锚点对象 ID
 const SLOT_LIMIT = 2;
 const DEFAULT_PWD = "123456";
 const DAYS = 14;
 
-let allObjects = [];
+let data = { adminHash:"", updatedAt:0, appointments:[] };
 let appts = [];
-let cfgObj = null;
 let selectedDate = todayStr();
 let adminAuthed = false;
-let loading = false;
+let syncing = false;
 
 function $(id){ return document.getElementById(id); }
 function todayStr(){ const d=new Date(); return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"); }
@@ -179,7 +175,7 @@ function weekdayCn(dateStr){
   const p=dateStr.split("-").map(Number);
   return ["周日","周一","周二","周三","周四","周五","周六"][new Date(p[0],p[1]-1,p[2]).getDay()];
 }
-function slotsFor(dateStr){
+function slotsFor(){
   const slots=[];
   for(let h=10; h<12; h++){ slots.push(h+":00"); slots.push(h+":30"); }
   for(let h=13; h<17; h++){ slots.push(h+":00"); slots.push(h+":30"); }
@@ -191,39 +187,49 @@ async function sha256(text){
   return [...new Uint8Array(buf)].map(b=>b.toString(16).padStart(2,"0")).join("");
 }
 
-async function loadAll(quiet){
-  loading = true;
+async function fetchData(){
+  const res = await fetch(API+"/"+CFG_ID, {cache:"no-store"});
+  if(!res.ok) throw new Error("HTTP "+res.status);
+  const j = await res.json();
+  return j.data || { adminHash:"", updatedAt:0, appointments:[] };
+}
+async function putData(d){
+  const res = await fetch(API+"/"+CFG_ID, {method:"PUT", headers:{"Content-Type":"application/json"}, body:JSON.stringify({name:"msjy2026-cfg", data:d})});
+  if(!res.ok) throw new Error("HTTP "+res.status);
+  return res.json();
+}
+
+async function sync(quiet){
+  if(syncing) return;
+  syncing = true;
   try{
-    const res = await fetch(API, {cache:"no-store"});
-    if(!res.ok) throw new Error("HTTP "+res.status);
-    allObjects = await res.json();
+    data = await fetchData();
+    appts = Array.isArray(data.appointments)? data.appointments : [];
+    render();
   }catch(e){
     if(!quiet) toast("数据服务暂时连不上，请稍后重试");
-    allObjects = [];
+  }finally{
+    syncing = false;
   }
-  appts = (allObjects||[]).filter(o=>String(o.name||"").startsWith(APP_PREFIX)).map(o=>({id:o.id, data:o.data||{}}));
-  const c = (allObjects||[]).find(o=>o.name===CFG_NAME);
-  cfgObj = c ? {id:c.id, data:c.data||{}} : null;
-  loading = false;
-  render();
 }
 
-async function apiPost(obj){
-  const res = await fetch(API, {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(obj)});
-  if(!res.ok) throw new Error("HTTP "+res.status);
-  return res.json();
-}
-async function apiPut(id, obj){
-  const res = await fetch(API+"/"+id, {method:"PUT", headers:{"Content-Type":"application/json"}, body:JSON.stringify(obj)});
-  if(!res.ok) throw new Error("HTTP "+res.status);
-  return res.json();
-}
-async function apiDelete(id){
-  const res = await fetch(API+"/"+id, {method:"DELETE"});
-  if(!res.ok && res.status!==404) throw new Error("HTTP "+res.status);
+async function mutate(fn){
+  for(let i=0;i<8;i++){
+    const cur = await fetchData();
+    const next = fn(JSON.parse(JSON.stringify(cur)));
+    next.updatedAt = Date.now();
+    await putData(next);
+    const check = await fetchData();
+    if(check.updatedAt === next.updatedAt && (check.appointments||[]).length === (next.appointments||[]).length){
+      data = next; appts = next.appointments||[];
+      return next;
+    }
+    await new Promise(r=>setTimeout(r, 300+i*200));
+  }
+  throw new Error("提交冲突，请重试");
 }
 
-function apptsAt(date, time){ return appts.filter(a=>a.data.date===date && a.data.time===time); }
+function apptsAt(date, time){ return appts.filter(a=>a.date===date && a.time===time); }
 function countAt(date, time){ return apptsAt(date,time).length; }
 
 function render(){
@@ -244,7 +250,7 @@ function renderDates(){
 }
 function renderSlots(){
   const box=$("slots"); box.innerHTML="";
-  const slots=slotsFor(selectedDate);
+  const slots=slotsFor();
   for(const t of slots){
     const n=countAt(selectedDate,t);
     const el=document.createElement("div");
@@ -280,15 +286,19 @@ async function submitBook(){
   if(!phone) return toast("请填写手机号");
   $("submitBtn").disabled=true;
   try{
-    await loadAll(true);
-    if(countAt(sheetDate,sheetTime)>=SLOT_LIMIT){ toast("这个时间刚被约满了，请换一个时间"); closeSheet(); return; }
-    const obj={ name:APP_PREFIX+uuid(), data:{ name, age, phone, date:sheetDate, time:sheetTime, inviter, createdAt:Date.now(), checkedIn:false } };
-    await apiPost(obj);
+    const ok = await mutate(cur=>{
+      const curList = cur.appointments||[];
+      const cnt = curList.filter(a=>a.date===sheetDate && a.time===sheetTime).length;
+      if(cnt>=SLOT_LIMIT) throw new Error("该时间已被约满，请换一个");
+      cur.appointments = curList.concat([{ id:uuid(), name, age, phone, date:sheetDate, time:sheetTime, inviter, createdAt:Date.now(), checkedIn:false }]);
+      return cur;
+    });
     toast("预约成功！"+sheetDate+" "+sheetTime);
     closeSheet();
-    await loadAll(true);
+    render();
   }catch(e){
-    toast("提交失败，请重试");
+    toast(e.message && e.message.includes("约满")? e.message : "提交失败，请重试");
+    if(e.message && e.message.includes("约满")) closeSheet();
   }finally{
     $("submitBtn").disabled=false;
   }
@@ -306,7 +316,7 @@ async function openAdmin(){
   const pwd=prompt("请输入管理密码（默认 123456）：");
   if(pwd===null) return;
   const hash=await sha256(String(pwd));
-  const target=cfgObj?.data?.adminHash || await sha256(DEFAULT_PWD);
+  const target=data.adminHash || await sha256(DEFAULT_PWD);
   if(hash===target){ adminAuthed=true; showAdmin(); }
   else toast("密码错误");
 }
@@ -319,52 +329,59 @@ function showAdmin(){
 function backPublic(){ $("adminView").classList.add("hidden"); $("publicView").classList.remove("hidden"); render(); }
 
 function renderAdmin(){
-  const sorted=[...appts].sort((a,b)=>(a.data.date+a.data.time).localeCompare(b.data.date+b.data.time));
+  const sorted=[...appts].sort((a,b)=>(a.date+a.time).localeCompare(b.date+b.time));
   const total=sorted.length;
-  const today=appts.filter(a=>a.data.date===todayStr()).length;
-  const pending=appts.filter(a=>!a.data.checkedIn).length;
-  const done=appts.filter(a=>!!a.data.checkedIn).length;
+  const today=appts.filter(a=>a.date===todayStr()).length;
+  const pending=appts.filter(a=>!a.checkedIn).length;
+  const done=appts.filter(a=>!!a.checkedIn).length;
   $("stTotal").textContent=total; $("stToday").textContent=today; $("stPending").textContent=pending; $("stDone").textContent=done;
   const box=$("adminList");
   if(!sorted.length){ box.innerHTML="<div class='empty'>还没有预约</div>"; return; }
   let html=""; let last="";
   for(const a of sorted){
-    const d=a.data;
-    const key=d.date;
-    if(key!==last){ html+="<div class='group-title'>"+d.date+"（"+weekdayCn(d.date)+"）</div>"; last=key; }
-    html+="<tr><td>"+d.time+"</td><td>"+esc(d.name)+"</td><td>"+esc(d.age||"-")+"</td><td>"+esc(d.phone||"-")+"</td><td>"+esc(d.inviter||"-")+"</td><td>"+(d.checkedIn?"<span class='tag ok'>已到面</span>":"<span class='tag no'>未到</span>")+"</td><td>";
-    if(!d.checkedIn) html+="<button class='btn small' onclick='markDone(\""+a.id+"\")'>标记已到面</button> ";
+    const key=a.date;
+    if(key!==last){
+      if(last) html+="</tbody></table>";
+      html+="<div class='group-title'>"+a.date+"（"+weekdayCn(a.date)+"）</div><table><thead><tr><th>时间</th><th>姓名</th><th>年龄</th><th>手机号</th><th>邀约人</th><th>状态</th><th>操作</th></tr></thead><tbody>";
+      last=key;
+    }
+    html+="<tr><td>"+a.time+"</td><td>"+esc(a.name)+"</td><td>"+esc(a.age||"-")+"</td><td>"+esc(a.phone||"-")+"</td><td>"+esc(a.inviter||"-")+"</td><td>"+(a.checkedIn?"<span class='tag ok'>已到面</span>":"<span class='tag no'>未到</span>")+"</td><td>";
+    if(!a.checkedIn) html+="<button class='btn small' onclick='markDone(\""+a.id+"\")'>标记已到面</button> ";
     html+="<button class='btn small gray' onclick='removeOne(\""+a.id+"\")'>删除</button></td></tr>";
   }
-  box.innerHTML="<table><thead><tr><th>时间</th><th>姓名</th><th>年龄</th><th>手机号</th><th>邀约人</th><th>状态</th><th>操作</th></tr></thead><tbody>"+html+"</tbody></table>";
+  if(last) html+="</tbody></table>";
+  box.innerHTML=html;
 }
 function esc(s){ return String(s==null?"":s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
 
 async function markDone(id){
   const a=appts.find(x=>x.id===id); if(!a) return;
-  if(!confirm("确认 "+a.data.name+" 已到面？")) return;
-  try{ await apiPut(id,{name:a.name,data:{...a.data,checkedIn:true}}); toast("已标记到面"); await loadAll(true); }
-  catch(e){ toast("操作失败"); }
+  if(!confirm("确认 "+a.name+" 已到面？")) return;
+  try{
+    await mutate(cur=>{ cur.appointments=(cur.appointments||[]).map(x=>x.id===id?{...x,checkedIn:true}:x); return cur; });
+    toast("已标记到面"); render();
+  }catch(e){ toast("操作失败"); }
 }
 async function removeOne(id){
   const a=appts.find(x=>x.id===id); if(!a) return;
-  if(!confirm("删除 "+a.data.name+" 的预约？")) return;
-  try{ await apiDelete(id); toast("已删除"); await loadAll(true); }
-  catch(e){ toast("操作失败"); }
+  if(!confirm("删除 "+a.name+" 的预约？")) return;
+  try{
+    await mutate(cur=>{ cur.appointments=(cur.appointments||[]).filter(x=>x.id!==id); return cur; });
+    toast("已删除"); render();
+  }catch(e){ toast("操作失败"); }
 }
 
 function exportCSV(){
   const rows=[["日期","时间","姓名","年龄","手机号","邀约人","登记时间","状态"]];
-  const sorted=[...appts].sort((a,b)=>(a.data.date+a.data.time).localeCompare(b.data.date+b.data.time));
+  const sorted=[...appts].sort((a,b)=>(a.date+a.time).localeCompare(b.date+b.time));
   for(const a of sorted){
-    const d=a.data;
-    rows.push([d.date,d.time,d.name,d.age||"",d.phone||"",d.inviter||"",new Date(d.createdAt||0).toLocaleString("zh-CN",{hour12:false}),d.checkedIn?"已到面":"未到"]);
+    rows.push([a.date,a.time,a.name,a.age||"",a.phone||"",a.inviter||"",new Date(a.createdAt||0).toLocaleString("zh-CN",{hour12:false}),a.checkedIn?"已到面":"未到"]);
   }
   const csv="\ufeff"+rows.map(r=>r.map(v=>'"'+String(v).replace(/"/g,'""')+'"').join(",")).join("\r\n");
   download(csv,"面试预约登记表.csv","text/csv;charset=utf-8");
 }
 function backupJSON(){
-  download(JSON.stringify(appts.map(a=>({id:a.id,data:a.data})),null,2),"面试预约备份.json","application/json");
+  download(JSON.stringify(appts,null,2),"面试预约备份.json","application/json");
 }
 function download(text,file,mime){
   const blob=new Blob([text],{type:mime});
@@ -378,8 +395,7 @@ async function savePwd(){
   if(pwd.length<4) return toast("密码至少 4 位");
   const hash=await sha256(pwd);
   try{
-    if(cfgObj){ await apiPut(cfgObj.id,{name:CFG_NAME,data:{adminHash:hash,updatedAt:Date.now()}}); }
-    else { const r=await apiPost({name:CFG_NAME,data:{adminHash:hash,updatedAt:Date.now()}}); cfgObj={id:r.id,data:r.data}; }
+    await mutate(cur=>{ cur.adminHash=hash; return cur; });
     toast("管理密码已修改");
     $("pwdEdit").classList.add("hidden");
   }catch(e){ toast("保存失败"); }
@@ -387,15 +403,14 @@ async function savePwd(){
 async function wipeAll(){
   if(!confirm("确定清空全部预约？此操作不可恢复（可先导出备份）！")) return;
   if(!confirm("再次确认：全部预约将被删除。")) return;
-  let ok=0, fail=0;
-  for(const a of appts){
-    try{ await apiDelete(a.id); ok++; }catch(e){ fail++; }
-  }
-  toast("已删除 "+ok+" 条"+(fail?"，失败 "+fail+" 条":""));
-  await loadAll(true);
+  try{
+    await mutate(cur=>{ cur.appointments=[]; return cur; });
+    toast("已清空全部预约"); render();
+  }catch(e){ toast("操作失败"); }
 }
 
-loadAll();
+sync();
+setInterval(()=>sync(true), 15000);
 </script>
 </body>
 </html>
