@@ -89,7 +89,7 @@
 <body>
 <div class="top">
   <h1>面试预约登记</h1>
-  <p>先选时间，再填信息；每个时间段最多 2 人。</p>
+      <p>先选时间，再填信息；每个时间段最多 2 人。</p>
 </div>
 
 <div class="wrap" id="publicView">
@@ -108,6 +108,7 @@
       每天可约：上午 10:00–12:00，下午 13:00–17:00，每半小时 1 个名额，同一时间最多 2 人。<br>
       预约时先填你的名字，邀约人会自动填成你的名字（可修改）。<br>
       绿色=可约，黄色=剩 1 个，灰色=已满。<br>
+      同一个人可以重复登记同一个时间段（直到满 2 人），登记后在「我的预约」里可“再约一次”。<br>
       预约成功后可在「我的预约」里标记已到面或取消预约。<br>
       <b>临时登记网站，请勿填写身份证号、银行卡等敏感信息。</b>
     </div>
@@ -271,7 +272,7 @@ function renderSlots(){
     const n=countAt(selectedDate,t);
     const el=document.createElement("div");
     if(n>=SLOT_LIMIT){ el.className="slot full"; el.innerHTML="<span class='badge'>已满</span><div class='t'>"+t+"</div><div class='c'>"+n+"/"+SLOT_LIMIT+" 人</div>"; }
-    else if(n===1){ el.className="slot mid"; el.innerHTML="<span class='badge'>剩 1</span><div class='t'>"+t+"</div><div class='c'>"+n+"/"+SLOT_LIMIT+" 人</div>"; }
+    else if(n===1){ el.className="slot mid"; el.innerHTML="<span class='badge'>剩 1</span><div class='t'>"+t+"</div><div class='c'>"+n+"/"+SLOT_LIMIT+" 人</div>"; el.onclick=()=>openSheet(selectedDate,t); }
     else { el.className="slot free"; el.innerHTML="<span class='badge'>可约</span><div class='t'>"+t+"</div><div class='c'>0/"+SLOT_LIMIT+" 人</div>"; el.onclick=()=>openSheet(selectedDate,t); }
     box.appendChild(el);
   }
@@ -304,15 +305,9 @@ async function submitBook(){
   try{
     const list1 = await fetchList();
     const cnt1 = list1.filter(o=>(o.data||{}).date===sheetDate && (o.data||{}).time===sheetTime && !((o.data||{}).kind==="cfg")).length;
-    if(cnt1>=SLOT_LIMIT){ toast("该时间已被约满，请换一个"); closeSheet(); return; }
+    if(cnt1>=SLOT_LIMIT){ toast("该时间已满 2 人，请换一个时间"); closeSheet(); return; }
     const rec = { name:"appt-"+uuid(), data:{ name, age, phone, date:sheetDate, time:sheetTime, inviter, createdAt:Date.now(), checkedIn:false } };
     const created = await createAppt(rec);
-    const list2 = await fetchList();
-    const cnt2 = list2.filter(o=>(o.data||{}).date===sheetDate && (o.data||{}).time===sheetTime && !((o.data||{}).kind==="cfg")).length;
-    if(cnt2>SLOT_LIMIT){
-      try{ await deleteAppt(created.id); }catch(_){}
-      toast("手慢了，这个时间刚被约满"); closeSheet(); return;
-    }
     const my = loadMy();
     my.push({ id:created.id, date:sheetDate, time:sheetTime, name });
     saveMy(my);
@@ -343,10 +338,21 @@ function renderMy(){
       continue;
     }
     html+="<div class='my-row'><div><b>"+esc(d.name)+"</b> "+d.date+" "+d.time+" "+(d.checkedIn?"<span class='tag ok'>已到面</span>":"<span class='tag no'>未到</span>")+"</div><div class='ops'>";
+    if(!d.checkedIn) html+="<button class='btn small' onclick='bookAgain(\""+cur.id+"\")'>再约一次</button> ";
     if(!d.checkedIn) html+="<button class='btn small' onclick='markMyDone(\""+cur.id+"\")'>标记已到面</button> ";
     html+="<button class='btn small gray' onclick='cancelMy(\""+cur.id+"\")'>取消预约</button></div></div>";
   }
   box.innerHTML=html;
+}
+function bookAgain(id){
+  const a=appts.find(x=>x.id===id); if(!a) return;
+  const d=a.data||{};
+  openSheet(d.date, d.time);
+  $("fName").value=d.name||"";
+  $("fAge").value=d.age||"";
+  $("fPhone").value=d.phone||"";
+  $("fInviter").value=d.inviter||"";
+  $("myCard").classList.add("hidden");
 }
 function toggleMy(){
   const card=$("myCard");
