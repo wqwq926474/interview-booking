@@ -84,6 +84,19 @@
   .loading{text-align:center; color:var(--sub); padding:20px 0; font-size:14px;}
   .my-row{display:flex; align-items:center; justify-content:space-between; gap:10px; border:1px solid var(--line); border-radius:12px; padding:10px 12px; margin-bottom:8px;}
   .my-row .ops{display:flex; gap:6px; flex-shrink:0;}
+  .charts{display:grid; grid-template-columns:repeat(2,1fr); gap:10px; margin-top:12px;}
+  @media(max-width:560px){.charts{grid-template-columns:1fr;}}
+  .chart-card{background:var(--card); border:1px solid var(--line); border-radius:14px; padding:12px;}
+  .chart-card h4{margin:0 0 10px; font-size:14px;}
+  .bars{display:flex; align-items:flex-end; gap:6px; height:130px; padding:0 2px;}
+  .bars .bar{flex:1; display:flex; flex-direction:column; align-items:center; justify-content:flex-end; gap:4px; min-width:0;}
+  .bars .bar .fill{width:100%; background:linear-gradient(180deg,#60a5fa,#2563eb); border-radius:6px 6px 0 0; min-height:2px;}
+  .bars .bar .bl{font-size:10px; color:var(--sub); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:100%;}
+  .bars .bar .bv{font-size:11px; font-weight:700; color:var(--primary-d);}
+  .pie{width:96px; height:96px; border-radius:50%; margin:4px auto;}
+  .legend{font-size:12px; color:var(--sub); display:flex; flex-wrap:wrap; gap:8px; justify-content:center; margin-top:6px;}
+  .legend i{display:inline-block; width:10px; height:10px; border-radius:3px; margin-right:3px; vertical-align:-1px;}
+  select{width:100%; border:1px solid var(--line); border-radius:10px; padding:12px 10px; font-size:15px; outline:none; background:#f8fafc; color:var(--text);}
 </style>
 </head>
 <body>
@@ -123,6 +136,7 @@
       <div class="box"><div class="num" id="stPending">0</div><div class="lab">待面</div></div>
       <div class="box"><div class="num" id="stDone">0</div><div class="lab">已到面</div></div>
     </div>
+    <div class="charts" id="charts"></div>
     <div class="admin-actions">
       <button class="btn small" onclick="exportCSV()">导出 CSV 表格</button>
       <button class="btn small gray" onclick="backupJSON()">备份 JSON</button>
@@ -144,13 +158,39 @@
   <div class="field"><label>姓名 *</label><input id="fName" type="text" placeholder="预约面试姓名" maxlength="30"></div>
   <div class="row2">
     <div class="field"><label>年龄</label><input id="fAge" type="text" inputmode="numeric" placeholder="选填" maxlength="3"></div>
+    <div class="field"><label>性别</label><select id="fGender"><option value="">保密</option><option value="男">男</option><option value="女">女</option></select></div>
+  </div>
+  <div class="row2">
     <div class="field"><label>手机号 *</label><input id="fPhone" type="tel" placeholder="手机号" maxlength="20"></div>
+    <div class="field"><label>邀约人</label><input id="fInviter2" type="text" maxlength="30"></div>
   </div>
   <div class="field"><label>到面时间</label><input id="fTime" type="text" readonly></div>
-  <div class="field"><label>邀约人</label><input id="fInviter" type="text" maxlength="30"><div class="hint">默认自动填成你的姓名</div></div>
+  <div class="field"><div class="hint">邀约人默认自动填成你的姓名</div></div>
   <div class="btns">
     <button class="btn ghost" onclick="closeSheet()">取消</button>
     <button class="btn" id="submitBtn" onclick="submitBook()">确认预约</button>
+  </div>
+</div>
+
+<div class="mask" id="mask2"></div>
+<div class="sheet" id="editSheet">
+  <div class="grab"></div>
+  <h3 id="editTitle">编辑预约</h3>
+  <div class="field"><label>姓名</label><input id="eName" type="text" maxlength="30"></div>
+  <div class="row2">
+    <div class="field"><label>年龄</label><input id="eAge" type="text" inputmode="numeric" maxlength="3"></div>
+    <div class="field"><label>性别</label><select id="eGender"><option value="">保密</option><option value="男">男</option><option value="女">女</option></select></div>
+  </div>
+  <div class="field"><label>手机号</label><input id="ePhone" type="tel" maxlength="20"></div>
+  <div class="row2">
+    <div class="field"><label>日期</label><input id="eDate" type="date"></div>
+    <div class="field"><label>时间</label><select id="eTime"></select></div>
+  </div>
+  <div class="field"><label>邀约人</label><input id="eInviter" type="text" maxlength="30"></div>
+  <div class="field"><label><input id="eChecked" type="checkbox"> 已到面</label></div>
+  <div class="btns">
+    <button class="btn ghost" onclick="closeEdit()">取消</button>
+    <button class="btn" onclick="saveEdit()">保存修改</button>
   </div>
 </div>
 
@@ -271,7 +311,7 @@ function countAt(date, time){ return apptsAt(date,time).length; }
 function render(){
   renderDates();
   renderSlots();
-  if(adminAuthed) renderAdmin();
+  if(adminAuthed){ renderAdmin(); renderStats(); }
   if(!$("myCard").classList.contains("hidden")) renderMy();
 }
 function renderDates(){
@@ -303,22 +343,24 @@ function openSheet(date,time){
   sheetDate=date; sheetTime=time;
   $("sheetTitle").textContent="预约 · "+date+" "+time;
   $("fTime").value=date+" "+time;
-  $("fName").value=""; $("fAge").value=""; $("fPhone").value=""; $("fInviter").value="";
+  $("fName").value=""; $("fAge").value=""; $("fPhone").value="";
+  $("fGender").value=""; $("fInviter2").value="";
   $("mask").style.display="block"; $("sheet").classList.add("open");
   setTimeout(()=>$("fName").focus(),300);
 }
 function closeSheet(){ $("mask").style.display="none"; $("sheet").classList.remove("open"); }
 $("mask").onclick=closeSheet;
 $("fName").addEventListener("input",function(){
-  if($("fInviter").dataset.manual!=="1") $("fInviter").value=this.value;
+  if($("fInviter2").dataset.manual!=="1") $("fInviter2").value=this.value;
 });
-$("fInviter").addEventListener("input",function(){ this.dataset.manual="1"; });
+$("fInviter2").addEventListener("input",function(){ this.dataset.manual="1"; });
 
 async function submitBook(){
   const name=$("fName").value.trim();
   const age=$("fAge").value.trim();
   const phone=$("fPhone").value.trim();
-  const inviter=$("fInviter").value.trim()||name;
+  const gender=$("fGender").value;
+  const inviter=$("fInviter2").value.trim()||name;
   if(!name) return toast("请填写姓名");
   if(!phone) return toast("请填写手机号");
   $("submitBtn").disabled=true;
@@ -327,7 +369,7 @@ async function submitBook(){
       const curList = cur.appointments||[];
       const cnt = curList.filter(a=>(a.data||{}).date===sheetDate && (a.data||{}).time===sheetTime).length;
       if(cnt>=SLOT_LIMIT) throw new Error("该时间已满 2 人，请换一个时间");
-      cur.appointments = curList.concat([{ id:uuid(), data:{ name, age, phone, date:sheetDate, time:sheetTime, inviter, createdAt:Date.now(), checkedIn:false } }]);
+      cur.appointments = curList.concat([{ id:uuid(), data:{ name, age, gender, phone, date:sheetDate, time:sheetTime, inviter, createdAt:Date.now(), checkedIn:false } }]);
       return cur;
     });
     const added = ok.appointments[ok.appointments.length-1];
@@ -411,21 +453,115 @@ function scrollTopPublic(){ backPublic(); $("publicView").scrollIntoView({behavi
 
 // ---------- 管理 ----------
 async function openAdmin(){
-  if(adminAuthed){ showAdmin(); return; }
-  const pwd=prompt("请输入管理密码（默认 123456）：");
-  if(pwd===null) return;
-  const hash=await sha256(String(pwd));
-  const target=cfgHash || await sha256(DEFAULT_PWD);
-  if(hash===target){ adminAuthed=true; showAdmin(); }
-  else toast("密码错误");
+  // 全览公开查看，无需密码
+  adminAuthed = true;
+  showAdmin();
 }
 function showAdmin(){
   $("publicView").classList.add("hidden");
   $("adminView").classList.remove("hidden");
   renderAdmin();
+  renderStats();
   $("adminView").scrollIntoView();
 }
 function backPublic(){ $("adminView").classList.add("hidden"); $("publicView").classList.remove("hidden"); render(); }
+
+function renderStats(){
+  const box=$("charts");
+  if(!box) return;
+  // 年龄分布
+  const ageBins=[["≤20",0,20],["21-29",21,29],["30-39",30,39],["40-49",40,49],["≥50",50,200]];
+  const ageCount=ageBins.map(b=>appts.filter(a=>{
+    const n=parseInt((a.data||{}).age,10);
+    return !isNaN(n)&&n>=b[1]&&n<=b[2];
+  }).length);
+  const ageMax=Math.max(1,...ageCount);
+  // 性别分布
+  const gMale=appts.filter(a=>(a.data||{}).gender==="男").length;
+  const gFemale=appts.filter(a=>(a.data||{}).gender==="女").length;
+  const gOther=appts.length-gMale-gFemale;
+  const tot=Math.max(1,appts.length);
+  const p1=Math.round(gMale/tot*100);
+  const p2=Math.round(gFemale/tot*100);
+  const p3=100-p1-p2;
+  // 时间段分布（全部日期）
+  const slots=slotsFor();
+  const timeCount=slots.map(t=>appts.filter(a=>(a.data||{}).time===t).length);
+  const timeMax=Math.max(1,...timeCount);
+  // 日期分布
+  const dLabels=[],dCount=[];
+  for(let i=0;i<DAYS;i++){
+    const ds=addDays(todayStr(),i);
+    dLabels.push(i===0?"今天":(i===1?"明天":ds.slice(5)));
+    dCount.push(appts.filter(a=>(a.data||{}).date===ds).length);
+  }
+  const dMax=Math.max(1,...dCount);
+  box.innerHTML=
+    "<div class='chart-card'><h4>年龄分布</h4><div class='bars'>"+
+    ageBins.map((b,i)=>"<div class='bar'><span class='bv'>"+ageCount[i]+"</span><div class='fill' style='height:"+Math.round(ageCount[i]/ageMax*100)+"%'></div><span class='bl'>"+b[0]+"</span></div>").join("")+
+    "</div></div>"+
+    "<div class='chart-card'><h4>性别分布</h4><div class='pie' style='background:conic-gradient(#2563eb 0 "+p1+"%,#ec4899 "+p1+"% "+(p1+p2)+"%,#94a3b8 "+(p1+p2)+"% 100%)'></div>"+
+    "<div class='legend'><span><i style='background:#2563eb'></i>男 "+gMale+"</span><span><i style='background:#ec4899'></i>女 "+gFemale+"</span><span><i style='background:#94a3b8'></i>保密 "+gOther+"</span></div></div>"+
+    "<div class='chart-card'><h4>时间段分布（全部日期）</h4><div class='bars'>"+
+    slots.map((t,i)=>"<div class='bar'><span class='bv'>"+timeCount[i]+"</span><div class='fill' style='height:"+Math.round(timeCount[i]/timeMax*100)+"%'></div><span class='bl'>"+t+"</span></div>").join("")+
+    "</div></div>"+
+    "<div class='chart-card'><h4>日期分布</h4><div class='bars'>"+
+    dLabels.map((l,i)=>"<div class='bar'><span class='bv'>"+dCount[i]+"</span><div class='fill' style='height:"+Math.round(dCount[i]/dMax*100)+"%'></div><span class='bl'>"+l+"</span></div>").join("")+
+    "</div></div>";
+}
+
+let editId=null;
+function editAppt(id){
+  const a=appts.find(x=>x.id===id); if(!a) return;
+  const d=a.data||{}; editId=id;
+  $("eName").value=d.name||"";
+  $("eAge").value=d.age||"";
+  $("eGender").value=d.gender||"";
+  $("ePhone").value=d.phone||"";
+  $("eDate").value=d.date||"";
+  $("eInviter").value=d.inviter||"";
+  $("eChecked").checked=!!d.checkedIn;
+  const sel=$("eTime"); sel.innerHTML="";
+  for(const t of slotsFor()){
+    const o=document.createElement("option"); o.value=t; o.textContent=t; sel.appendChild(o);
+  }
+  sel.value=d.time||"";
+  $("editTitle").textContent="编辑 · "+(d.name||"");
+  $("mask2").style.display="block"; $("editSheet").classList.add("open");
+}
+function closeEdit(){ $("mask2").style.display="none"; $("editSheet").classList.remove("open"); }
+$("mask2").onclick=closeEdit;
+async function saveEdit(){
+  if(!editId) return;
+  const name=$("eName").value.trim();
+  if(!name) return toast("姓名不能为空");
+  const date=$("eDate").value, time=$("eTime").value;
+  if(!date||!time) return toast("请选择日期和时间");
+  try{
+    await mutate(cur=>{
+      const list=cur.appointments||[];
+      const cnt=list.filter(a=>a.id!==editId && (a.data||{}).date===date && (a.data||{}).time===time).length;
+      if(cnt>=SLOT_LIMIT) throw new Error("该时间已满 2 人");
+      cur.appointments=list.map(x=>x.id===editId?{
+        ...x,
+        data:{
+          ...(x.data||{}),
+          name,
+          age:$("eAge").value.trim(),
+          gender:$("eGender").value,
+          phone:$("ePhone").value.trim(),
+          date, time,
+          inviter:$("eInviter").value.trim()||name,
+          checkedIn:$("eChecked").checked
+        }
+      }:x);
+      return cur;
+    });
+    toast("已保存修改"); closeEdit(); render();
+  }catch(e){
+    toast(e.message&&e.message.includes("满")?e.message:"保存失败，请重试");
+  }
+}
 
 function renderAdmin(){
   const sorted=[...appts].sort((a,b)=>((a.data||{}).date+(a.data||{}).time).localeCompare((b.data||{}).date+(b.data||{}).time));
@@ -441,10 +577,11 @@ function renderAdmin(){
     const key=d.date;
     if(key!==last){
       if(last) html+="</tbody></table>";
-      html+="<div class='group-title'>"+d.date+"（"+weekdayCn(d.date)+"）</div><table><thead><tr><th>时间</th><th>姓名</th><th>年龄</th><th>手机号</th><th>邀约人</th><th>状态</th><th>操作</th></tr></thead><tbody>";
+      html+="<div class='group-title'>"+d.date+"（"+weekdayCn(d.date)+"）</div><table><thead><tr><th>时间</th><th>姓名</th><th>年龄</th><th>性别</th><th>手机号</th><th>邀约人</th><th>状态</th><th>操作</th></tr></thead><tbody>";
       last=key;
     }
-    html+="<tr><td>"+d.time+"</td><td>"+esc(d.name)+"</td><td>"+esc(d.age||"-")+"</td><td>"+esc(d.phone||"-")+"</td><td>"+esc(d.inviter||"-")+"</td><td>"+(d.checkedIn?"<span class='tag ok'>已到面</span>":"<span class='tag no'>未到</span>")+"</td><td>";
+    html+="<tr><td>"+d.time+"</td><td>"+esc(d.name)+"</td><td>"+esc(d.age||"-")+"</td><td>"+esc(d.gender||"-")+"</td><td>"+esc(d.phone||"-")+"</td><td>"+esc(d.inviter||"-")+"</td><td>"+(d.checkedIn?"<span class='tag ok'>已到面</span>":"<span class='tag no'>未到</span>")+"</td><td>";
+    html+="<button class='btn small gray' onclick='editAppt(\""+a.id+"\")'>编辑</button> ";
     if(!d.checkedIn) html+="<button class='btn small' onclick='markDone(\""+a.id+"\")'>标记已到面</button> ";
     html+="<button class='btn small gray' onclick='removeOne(\""+a.id+"\")'>删除</button></td></tr>";
   }
@@ -502,6 +639,10 @@ async function savePwd(){
   }catch(e){ toast("保存失败"); }
 }
 async function wipeAll(){
+  const pwd=prompt("清空全部预约需要管理密码（默认 123456）：");
+  if(pwd===null) return;
+  const hash=await sha256(String(pwd));
+  if(hash!==(cfgHash||await sha256(DEFAULT_PWD))){ toast("密码错误"); return; }
   if(!confirm("确定清空全部预约？此操作不可恢复（可先导出备份）！")) return;
   if(!confirm("再次确认：全部预约将被删除。")) return;
   try{
