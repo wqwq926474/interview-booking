@@ -98,6 +98,9 @@
     <h2>我的预约</h2>
     <div id="myList"></div>
   </div>
+  <div style="display:flex; justify-content:flex-end; margin-top:10px;">
+    <button class="btn ghost small" onclick="sync()">刷新预约情况</button>
+  </div>
   <div class="dates" id="dates"></div>
   <div class="slot-grid" id="slots"></div>
   <div class="card">
@@ -468,7 +471,6 @@ async function wipeAll(){
 }
 
 sync();
-setInterval(()=>sync(true), 15000);
 </script>
 </body>
 </html>
