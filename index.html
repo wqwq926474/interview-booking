@@ -83,6 +83,8 @@
   .pwd-card{max-width:340px; margin:40px auto; text-align:center;}
   .empty{color:var(--sub); text-align:center; padding:30px 0; font-size:14px;}
   .loading{text-align:center; color:var(--sub); padding:20px 0; font-size:14px;}
+  .my-row{display:flex; align-items:center; justify-content:space-between; gap:10px; border:1px solid var(--line); border-radius:12px; padding:10px 12px; margin-bottom:8px;}
+  .my-row .ops{display:flex; gap:6px; flex-shrink:0;}
 </style>
 </head>
 <body>
@@ -92,6 +94,10 @@
 </div>
 
 <div class="wrap" id="publicView">
+  <div class="card hidden" id="myCard">
+    <h2>我的预约</h2>
+    <div id="myList"></div>
+  </div>
   <div class="dates" id="dates"></div>
   <div class="slot-grid" id="slots"></div>
   <div class="card">
@@ -132,7 +138,7 @@
 <div class="sheet" id="sheet">
   <div class="grab"></div>
   <h3 id="sheetTitle">预约面试</h3>
-  <div class="field"><label>姓名 *</label><input id="fName" type="text" placeholder="请输入你的姓名" maxlength="30"></div>
+  <div class="field"><label>姓名 *</label><input id="fName" type="text" placeholder="预约面试姓名" maxlength="30"></div>
   <div class="row2">
     <div class="field"><label>年龄</label><input id="fAge" type="text" inputmode="numeric" placeholder="选填" maxlength="3"></div>
     <div class="field"><label>手机号 *</label><input id="fPhone" type="tel" placeholder="手机号" maxlength="20"></div>
@@ -147,6 +153,7 @@
 
 <div class="footer-bar">
   <button class="btn" onclick="scrollTopPublic()">预约面试</button>
+  <button class="btn ghost" onclick="toggleMy()">我的预约</button>
   <button class="btn ghost" onclick="openAdmin()">管理 / 全览</button>
 </div>
 <div class="toast" id="toast"></div>
@@ -157,6 +164,7 @@ const CFG_ID = "ff8081819ff5b11001a0276abe2372ab"; // 数据锚点对象 ID
 const SLOT_LIMIT = 2;
 const DEFAULT_PWD = "123456";
 const DAYS = 14;
+const MY_KEY = "msjy_my_appts";
 
 let data = { adminHash:"", updatedAt:0, appointments:[] };
 let appts = [];
@@ -236,6 +244,7 @@ function render(){
   renderDates();
   renderSlots();
   if(adminAuthed) renderAdmin();
+  if(!$("myCard").classList.contains("hidden")) renderMy();
 }
 function renderDates(){
   const box=$("dates"); box.innerHTML="";
@@ -293,7 +302,13 @@ async function submitBook(){
       cur.appointments = curList.concat([{ id:uuid(), name, age, phone, date:sheetDate, time:sheetTime, inviter, createdAt:Date.now(), checkedIn:false }]);
       return cur;
     });
-    toast("预约成功！"+sheetDate+" "+sheetTime);
+    const added = ok.appointments[ok.appointments.length-1];
+    if(added && added.id){
+      const my = loadMy();
+      my.push({ id:added.id, date:sheetDate, time:sheetTime, name });
+      saveMy(my);
+    }
+    toast("预约成功！"+sheetDate+" "+sheetTime+"，可在「我的预约」标记到面或取消");
     closeSheet();
     render();
   }catch(e){
@@ -302,6 +317,49 @@ async function submitBook(){
   }finally{
     $("submitBtn").disabled=false;
   }
+}
+
+function loadMy(){
+  try{ const v=JSON.parse(localStorage.getItem(MY_KEY)||"[]"); return Array.isArray(v)?v:[]; }catch(e){ return []; }
+}
+function saveMy(list){ try{ localStorage.setItem(MY_KEY, JSON.stringify(list)); }catch(e){} }
+function renderMy(){
+  const my = loadMy();
+  const box = $("myList");
+  if(!my.length){ box.innerHTML="<div class='empty'>你还没有在本机登记过预约</div>"; return; }
+  let html="";
+  for(const m of my){
+    const cur = appts.find(a=>a.id===m.id);
+    if(!cur){
+      html+="<div class='my-row'><div><b>"+esc(m.name)+"</b> "+m.date+" "+m.time+"（已取消或失效）</div></div>";
+      continue;
+    }
+    html+="<div class='my-row'><div><b>"+esc(cur.name)+"</b> "+cur.date+" "+cur.time+" "+(cur.checkedIn?"<span class='tag ok'>已到面</span>":"<span class='tag no'>未到</span>")+"</div><div class='ops'>";
+    if(!cur.checkedIn) html+="<button class='btn small' onclick='markMyDone(\""+cur.id+"\")'>标记已到面</button> ";
+    html+="<button class='btn small gray' onclick='cancelMy(\""+cur.id+"\")'>取消预约</button></div></div>";
+  }
+  box.innerHTML=html;
+}
+function toggleMy(){
+  const card=$("myCard");
+  card.classList.toggle("hidden");
+  if(!card.classList.contains("hidden")){ sync(true); renderMy(); $("myCard").scrollIntoView({behavior:"smooth",block:"start"}); }
+}
+async function markMyDone(id){
+  if(!confirm("确认自己已到面？")) return;
+  try{
+    await mutate(cur=>{ cur.appointments=(cur.appointments||[]).map(x=>x.id===id?{...x,checkedIn:true}:x); return cur; });
+    toast("已标记到面"); render();
+  }catch(e){ toast("操作失败"); }
+}
+async function cancelMy(id){
+  const a=appts.find(x=>x.id===id); if(!a) return;
+  if(!confirm("确定取消 "+a.name+" "+a.date+" "+a.time+" 的预约？")) return;
+  try{
+    await mutate(cur=>{ cur.appointments=(cur.appointments||[]).filter(x=>x.id!==id); return cur; });
+    saveMy(loadMy().filter(m=>m.id!==id));
+    toast("已取消预约，该时间段已释放"); render();
+  }catch(e){ toast("操作失败"); }
 }
 
 function toast(msg){
