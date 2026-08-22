@@ -231,7 +231,7 @@ async function sync(quiet){
     cfgHash = data.adminHash || await sha256(DEFAULT_PWD);
     render();
   }catch(e){
-    if(!quiet) toast("数据服务暂时连不上，请稍后重试");
+    if(!quiet) toast(String(e.message).includes("403") ? "数据服务当天次数已用完，请换网络或稍后再试" : "数据服务暂时连不上，请稍后重试");
   }
 }
 async function mutate(fn){
